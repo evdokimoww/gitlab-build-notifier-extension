@@ -10,7 +10,7 @@
     "128": "icons/extension-128.png"
   },
   "permissions": ["tabs", "storage", "notifications", "alarms", "scripting", "offscreen"],
-  "host_permissions": ["https://git-02.t1-group.ru/*"],
+  "host_permissions": [],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "background.js",
