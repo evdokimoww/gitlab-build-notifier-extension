@@ -5,7 +5,6 @@ const defaults = {
   pollIntervalSec: 25,
   treatSkippedAsSuccess: true,
   treatCanceledAsFailure: true,
-  enableOverlay: false,
   enableFaviconTint: true,
   enableNotificationSound: true,
   projectWhitelist: "",
@@ -25,7 +24,6 @@ async function load() {
   $("pollIntervalSec").value = String(s.pollIntervalSec);
   $("treatSkippedAsSuccess").checked = s.treatSkippedAsSuccess;
   $("treatCanceledAsFailure").checked = s.treatCanceledAsFailure;
-  $("enableOverlay").checked = s.enableOverlay;
   $("enableFaviconTint").checked = s.enableFaviconTint;
   $("enableNotificationSound").checked = s.enableNotificationSound;
   $("projectWhitelist").value = s.projectWhitelist;
@@ -75,7 +73,6 @@ $("save").addEventListener("click", async () => {
     pollIntervalSec,
     treatSkippedAsSuccess: $("treatSkippedAsSuccess").checked,
     treatCanceledAsFailure: $("treatCanceledAsFailure").checked,
-    enableOverlay: $("enableOverlay").checked,
     enableFaviconTint: $("enableFaviconTint").checked,
     enableNotificationSound: $("enableNotificationSound").checked,
     projectWhitelist: $("projectWhitelist").value.trim(),

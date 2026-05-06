@@ -121,6 +121,79 @@ async function playNotificationSound(tabIds, success) {
   }
 }
 
+/**
+ * Уведомление, звук и подсветка вкладки.
+ * @param {{ enableOverlay?: boolean, enableFaviconTint?: boolean, enableNotificationSound?: boolean }} settings
+ */
+async function deliverCiNotification(tabIds, settings, { ok, title, message, notifId }) {
+  const iconUrl = chrome.runtime.getURL(
+    ok ? "icons/notify-ok.png" : "icons/notify-fail.png",
+  );
+
+  const permission = await new Promise((resolve) => {
+    if (chrome.notifications.getPermissionLevel) {
+      chrome.notifications.getPermissionLevel(resolve);
+    } else {
+      resolve("granted");
+    }
+  });
+  if (permission !== "granted") {
+    console.warn("[gitlab-notifier] уведомления браузера недоступны (уровень:", permission + "). Проверьте настройки уведомлений для Chrome в системе.");
+  }
+
+  await chrome.notifications.clear(notifId).catch(() => {});
+
+  try {
+    await chrome.notifications.create(notifId, {
+      type: "basic",
+      iconUrl,
+      title,
+      message,
+      priority: 2,
+    });
+  } catch (e) {
+    console.error("[gitlab-notifier] chrome.notifications.create:", e);
+    try {
+      await chrome.notifications.create({
+        type: "basic",
+        iconUrl,
+        title,
+        message,
+      });
+    } catch (e2) {
+      console.error("[gitlab-notifier] повторное создание уведомления:", e2);
+    }
+  }
+
+  if (settings.enableNotificationSound !== false) {
+    await playNotificationSound(tabIds, ok).catch((e) =>
+      console.warn("[gitlab-notifier] play sound:", e),
+    );
+  }
+
+  const faviconPath = ok ? "icons/notify-ok.png" : "icons/notify-fail.png";
+  const faviconUrl = await getIconDataUrl(faviconPath);
+
+  for (const tabId of tabIds) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: applyTabFeedback,
+        args: [
+          ok,
+          {
+            enableOverlay: settings.enableOverlay,
+            enableFaviconTint: settings.enableFaviconTint !== false,
+            faviconUrl,
+          },
+        ],
+      });
+    } catch (e) {
+      console.warn("[gitlab-notifier] tab script:", e);
+    }
+  }
+}
+
 async function loadSettings() {
   const d = await chrome.storage.local.get({
     gitlabBaseUrl: "https://git-02.t1-group.ru",
@@ -148,6 +221,26 @@ async function markNotified(key) {
   await chrome.storage.local.set({ notified });
 }
 
+const iconDataUrlCache = new Map();
+
+/** PNG из пакета расширения → data URL (странице нужен свой origin, не chrome-extension://). */
+async function getIconDataUrl(path) {
+  const cached = iconDataUrlCache.get(path);
+  if (cached) return cached;
+
+  const response = await fetch(chrome.runtime.getURL(path));
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+
+  const dataUrl = `data:image/png;base64,${btoa(binary)}`;
+  iconDataUrlCache.set(path, dataUrl);
+  return dataUrl;
+}
+
 function projectAllowed(projectPath, whitelistRaw) {
   const t = String(whitelistRaw || "").trim();
   if (!t) return true;
@@ -163,6 +256,24 @@ function normalizeJobStatus(status) {
     .trim()
     .toLowerCase();
   return s === "cancelled" ? "canceled" : s;
+}
+
+/**
+ * Время «завершения» стадии для эвристики свежести: GitLab не всегда даёт `finished_at` вовремя;
+ * `updated_at` у failed-джоба обычно есть.
+ */
+function latestStageRelevantTsMs(jobsInStage) {
+  let max = null;
+  for (const j of jobsInStage) {
+    for (const field of ["finished_at", "updated_at"]) {
+      const raw = j && j[field];
+      if (typeof raw !== "string") continue;
+      const t = Date.parse(raw);
+      if (Number.isNaN(t)) continue;
+      max = max === null ? t : Math.max(max, t);
+    }
+  }
+  return max;
 }
 
 function aggregateStage(jobsInStage, settings) {
@@ -308,6 +419,28 @@ async function runPoll() {
         break;
       }
     }
+    /*
+     * Первый опрос уже terminal «done» без prev — transition не был.
+     * Ошибка стадии: всегда оповещать (дедуп по notified). Успех: только «свежий» по времени джобов.
+     */
+    if (!shouldNotify && agg.phase === "done") {
+      const sawNonTerminal = tabIds.some((_, i) => {
+        const prev = prevByKey[phaseKeys[i]];
+        return prev !== undefined && prev !== "done";
+      });
+      if (!sawNonTerminal) {
+        if (!agg.ok) {
+          shouldNotify = true;
+        } else {
+          const ts = latestStageRelevantTsMs(inStage);
+          const pollMs = Math.max(10, Number(settings.pollIntervalSec) || 25) * 1000;
+          const freshMs = Math.max(15 * 60 * 1000, pollMs * 6);
+          if (ts !== null && Date.now() - ts <= freshMs) {
+            shouldNotify = true;
+          }
+        }
+      }
+    }
 
     await chrome.storage.session.set(
       Object.fromEntries(phaseKeys.map((key) => [key, agg.phase])),
@@ -321,77 +454,21 @@ async function runPoll() {
     const label = ok ? "CI: build OK" : "CI: build failed";
     const body = `${projectPath} · pipeline #${pipelineId} · stage «${stageName}»`;
     const notifId = `n_${projectPath.replace(/\W/g, "_")}_${pipelineId}_${stageName.replace(/\W+/g, "_")}`.slice(0, 120);
-    const iconUrl = chrome.runtime.getURL(
-      ok ? "icons/notify-ok.png" : "icons/notify-fail.png",
-    );
-
-    const permission = await new Promise((resolve) => {
-      if (chrome.notifications.getPermissionLevel) {
-        chrome.notifications.getPermissionLevel(resolve);
-      } else {
-        resolve("granted");
-      }
+    await deliverCiNotification(tabIds, settings, {
+      ok,
+      title: label,
+      message: body,
+      notifId,
     });
-    if (permission !== "granted") {
-      console.warn("[gitlab-notifier] уведомления браузера недоступны (уровень:", permission + "). Проверьте настройки уведомлений для Chrome в системе.");
-    }
-
-    await chrome.notifications.clear(notifId).catch(() => {});
-
-    try {
-      await chrome.notifications.create(notifId, {
-        type: "basic",
-        iconUrl,
-        title: label,
-        message: body,
-        priority: 2,
-      });
-    } catch (e) {
-      console.error("[gitlab-notifier] chrome.notifications.create:", e);
-      try {
-        await chrome.notifications.create({
-          type: "basic",
-          iconUrl,
-          title: label,
-          message: body,
-        });
-      } catch (e2) {
-        console.error("[gitlab-notifier] повторное создание уведомления:", e2);
-      }
-    }
-
-    if (settings.enableNotificationSound !== false) {
-      await playNotificationSound(tabIds, ok).catch((e) =>
-        console.warn("[gitlab-notifier] play sound:", e),
-      );
-    }
-
-    for (const tabId of tabIds) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: applyTabFeedback,
-          args: [
-            ok,
-            {
-              enableOverlay: settings.enableOverlay,
-              enableFaviconTint: settings.enableFaviconTint !== false,
-            },
-          ],
-        });
-      } catch (e) {
-        console.warn("[gitlab-notifier] tab script:", e);
-      }
-    }
   }
 }
 
 /**
  * Runs in page context via executeScript
  * @param {boolean} ok
- * @param {{ enableOverlay?: boolean, enableFaviconTint?: boolean }} tabFeedback
+ * @param {{ enableOverlay?: boolean, enableFaviconTint?: boolean, faviconUrl?: string }} tabFeedback
  */
-function applyTabFeedback(ok, tabFeedback) {
+async function applyTabFeedback(ok, tabFeedback) {
   const enableOverlay = tabFeedback && tabFeedback.enableOverlay;
   const enableFaviconTint = !tabFeedback || tabFeedback.enableFaviconTint !== false;
 
@@ -401,79 +478,68 @@ function applyTabFeedback(ok, tabFeedback) {
 
   if (enableFaviconTint) {
     const size = 32;
-    const fill = ok ? "#0d8050" : "#c03131";
     const fid = "__gitlab_ci_notifier_favicon__";
     const timerKey = "__gitlab_ci_notifier_favicon_iv__";
+    const strongUrl = tabFeedback && tabFeedback.faviconUrl;
 
-    /** @param {number} opacity 0..1 */
-    function circleDataUrl(opacity) {
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      const c = canvas.getContext("2d");
-      if (!c) return "";
-      c.clearRect(0, 0, size, size);
-      c.globalAlpha = opacity;
-      c.fillStyle = fill;
-      c.beginPath();
-      c.arc(size / 2, size / 2, size / 2 - 0.5, 0, Math.PI * 2);
-      c.fill();
-      return canvas.toDataURL("image/png");
+    function fadedIconDataUrl(src, opacity) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const c = canvas.getContext("2d");
+          if (!c) {
+            reject(new Error("canvas unavailable"));
+            return;
+          }
+          c.clearRect(0, 0, size, size);
+          c.globalAlpha = opacity;
+          c.drawImage(img, 0, 0, size, size);
+          resolve(canvas.toDataURL("image/png"));
+        };
+        img.onerror = reject;
+        img.src = src;
+      });
     }
 
-    const strongUrl = circleDataUrl(1);
-    const softUrl = circleDataUrl(0.28);
+    if (strongUrl) {
+      const softUrl = await fadedIconDataUrl(strongUrl, 0.28).catch(() => strongUrl);
 
-    /** Первый «родной» favicon, не наш — для чередования при мигании */
-    let nativeIconHref = "";
-    try {
-      for (const el of document.querySelectorAll('link[rel~="icon"], link[rel~="shortcut icon"]')) {
-        if (el.id === fid) continue;
-        const raw = el.getAttribute("href");
-        if (!raw) continue;
-        nativeIconHref = new URL(raw, document.baseURI).href;
-        break;
+      let link = document.getElementById(fid);
+      if (!link) {
+        link = document.createElement("link");
+        link.id = fid;
+        link.rel = "icon";
+        link.type = "image/png";
+        document.head.appendChild(link);
       }
-    } catch {
-      nativeIconHref = "";
-    }
 
-    let link = document.getElementById(fid);
-    if (!link) {
-      link = document.createElement("link");
-      link.id = fid;
-      link.rel = "icon";
-      link.type = "image/png";
-      document.head.appendChild(link);
-    }
+      const prevIv = window[timerKey];
+      if (typeof prevIv === "number") {
+        window.clearInterval(prevIv);
+      }
 
-    const prev = window[timerKey];
-    if (typeof prev === "number") {
-      window.clearInterval(prev);
-    }
+      let blinkOn = true;
+      let ticks = 0;
+      const blinkMs = 450;
+      const maxTicks = 28;
 
-    let blinkOn = true;
-    let ticks = 0;
-    const blinkMs = 450;
-    const maxTicks = 28; /* ~12.6 с, потом оставляем яркий кружок */
-
-    function showFrame() {
-      if (nativeIconHref) {
-        link.href = blinkOn ? strongUrl : nativeIconHref;
-      } else {
+      function showFrame() {
         link.href = blinkOn ? strongUrl : softUrl;
+        blinkOn = !blinkOn;
+        ticks += 1;
+        if (ticks >= maxTicks) {
+          window.clearInterval(window[timerKey]);
+          window[timerKey] = 0;
+          link.href = strongUrl;
+        }
       }
-      blinkOn = !blinkOn;
-      ticks += 1;
-      if (ticks >= maxTicks) {
-        window.clearInterval(window[timerKey]);
-        window[timerKey] = 0;
-        link.href = strongUrl;
-      }
-    }
 
-    showFrame();
-    window[timerKey] = window.setInterval(showFrame, blinkMs);
+      showFrame();
+      window[timerKey] = window.setInterval(showFrame, blinkMs);
+    }
   }
 
   if (!enableOverlay) return;
