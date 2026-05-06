@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GitLab build stage notifier",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Уведомления об окончании stage в GitLab по открытым вкладкам MR/пайплайна",
   "icons": {
     "128": "icons/notify-ok.png"
