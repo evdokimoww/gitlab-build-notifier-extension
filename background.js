@@ -70,6 +70,11 @@ function notifyKey(origin, projectPath, pipelineId, stageName) {
   return `${origin}|${projectPath}|${pipelineId}|${stageName}`;
 }
 
+/** @param {number} tabId @param {string} nk */
+function tabPhaseStorageKey(tabId, nk) {
+  return `tabStagePhase:${tabId}\n${nk}`;
+}
+
 /**
  * Звук в фоне: в service worker нет Audio — используем offscreen; при ошибке — вкладка GitLab.
  * @param {number[]} tabIds
@@ -292,8 +297,23 @@ async function runPoll() {
     );
     const agg = aggregateStage(inStage, settings);
 
-    if (agg.phase === "empty" || agg.phase === "running") continue;
-    if (agg.phase !== "done") continue;
+    const phaseKeys = tabIds.map((id) => tabPhaseStorageKey(id, nk));
+    const prevByKey = await chrome.storage.session.get(phaseKeys);
+
+    let shouldNotify = false;
+    for (let i = 0; i < tabIds.length; i += 1) {
+      const prev = prevByKey[phaseKeys[i]];
+      if (prev !== undefined && prev !== "done" && agg.phase === "done") {
+        shouldNotify = true;
+        break;
+      }
+    }
+
+    await chrome.storage.session.set(
+      Object.fromEntries(phaseKeys.map((key) => [key, agg.phase])),
+    );
+
+    if (agg.phase !== "done" || !shouldNotify) continue;
 
     const ok = agg.ok;
     await markNotified(nk);
@@ -540,4 +560,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     return;
   }
   loadSettings().then((s) => scheduleAlarm(Math.min(20, s.pollIntervalSec)));
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const prefix = `tabStagePhase:${tabId}\n`;
+  chrome.storage.session.get(null).then((all) => {
+    const toRemove = Object.keys(all).filter((k) => k.startsWith(prefix));
+    if (toRemove.length) chrome.storage.session.remove(toRemove);
+  });
 });
