@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>GitLab build notifier — настройки</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 640px;
+        margin: 24px auto;
+        padding: 0 16px;
+        line-height: 1.5;
+      }
+      label {
+        display: block;
+        margin-top: 16px;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 6px;
+        padding: 8px;
+      }
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 6px;
+        min-height: 72px;
+        padding: 8px;
+        font-family: inherit;
+      }
+      .hint {
+        color: #555;
+        font-size: 0.9rem;
+        font-weight: normal;
+        margin-top: 4px;
+      }
+      button {
+        margin-top: 20px;
+        padding: 10px 18px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 12px;
+        min-height: 1.5em;
+      }
+      .ok {
+        color: #0d8050;
+      }
+      .err {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>GitLab — уведомления о stage</h1>
+    <p>Укажите URL инстанса и токен с правом <code>read_api</code>. Откройте вкладки с MR или пайплайном на этом хосте.</p>
+
+    <label>
+      Базовый URL GitLab
+      <input type="text" id="gitlabBaseUrl" autocomplete="off" />
+      <span class="hint">Например https://git-02.t1-group.ru</span>
+    </label>
+
+    <label>
+      Personal Access Token
+      <input type="password" id="privateToken" autocomplete="current-password" />
+    </label>
+
+    <label>
+      Имя stage
+      <input type="text" id="stageName" />
+      <span class="hint">По умолчанию: build</span>
+    </label>
+
+    <label>
+      Интервал опроса (секунды)
+      <input type="number" id="pollIntervalSec" min="10" max="600" />
+    </label>
+
+    <label>
+      <input type="checkbox" id="treatSkippedAsSuccess" />
+      Считать skipped успехом для stage
+    </label>
+
+    <label>
+      <input type="checkbox" id="treatCanceledAsFailure" />
+      Считать canceled ошибкой
+    </label>
+
+    <label>
+      <input type="checkbox" id="enableOverlay" />
+      Показывать цветную полоску и мигание на странице GitLab
+    </label>
+
+    <label>
+      <input type="checkbox" id="enableFaviconTint" />
+      Менять иконку вкладки (favicon) на зелёный/красный кружок
+      <span class="hint">В Chrome нельзя красить саму пипку вкладки; иконка сайта во вкладке — самый заметный способ выделить страницу.</span>
+    </label>
+
+    <label>
+      <input type="checkbox" id="enableNotificationSound" />
+      Звуковой сигнал вместе с уведомлением
+      <span class="hint">Короткий сигнал из расширения (через фоновую страницу offscreen). В офисе можно отключить.</span>
+    </label>
+
+    <label>
+      Whitelist путей проекта (по строке на строку, пусто = все)
+      <textarea id="projectWhitelist" placeholder="frontend/fe-portal"></textarea>
+      <span class="hint">Префикс пути проекта в GitLab, например <code>frontend/fe-portal</code></span>
+    </label>
+
+    <button type="button" id="save">Сохранить</button>
+    <button type="button" id="resetNotified">Сбросить «уже уведомлено»</button>
+
+    <p id="status"></p>
+
+    <script src="options.js" type="module"></script>
+  </body>
+</html>
