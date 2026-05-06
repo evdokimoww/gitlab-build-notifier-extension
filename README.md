@@ -87,4 +87,4 @@
 | `popup.html/js`     | Краткий попап и ссылка на настройки. |
 | `offscreen.html/js` | Воспроизведение звука по URL из сообщения (успех / ошибка). |
 | `sounds/`           | `notify.wav` — успех; `notify-fail.wav` — ошибка (можно заменить своими). |
-| `icons/`            | `extension-16/32/48/128.png` — иконка расширения в панели; `extension-512.png` — исходник для правок; `notify-ok.png` / `notify-fail.png` — иконки системных уведомлений. |
+| `icons/`            | `extension-*.png` — иконка расширения на основе GitLab tanuki; **`notify-ok.png`** / **`notify-fail.png`** — иконки уведомлений (RGBA). |

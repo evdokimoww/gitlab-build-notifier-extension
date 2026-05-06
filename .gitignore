@@ -1,1 +1,4 @@
 .DS_Store
+
+# One-off icon rendering helpers; commit the generated PNG assets instead.
+scripts/render-*-icon.py
