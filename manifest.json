@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
   "name": "GitLab build stage notifier",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Уведомления об окончании stage в GitLab по открытым вкладкам MR/пайплайна",
   "icons": {
-    "128": "icons/notify-ok.png"
+    "16": "icons/extension-16.png",
+    "32": "icons/extension-32.png",
+    "48": "icons/extension-48.png",
+    "128": "icons/extension-128.png"
   },
   "permissions": ["tabs", "storage", "notifications", "alarms", "scripting", "offscreen"],
   "host_permissions": ["https://git-02.t1-group.ru/*"],
@@ -17,7 +20,10 @@
     "default_title": "GitLab CI: статус",
     "default_popup": "popup.html",
     "default_icon": {
-      "128": "icons/notify-ok.png"
+      "16": "icons/extension-16.png",
+      "32": "icons/extension-32.png",
+      "48": "icons/extension-48.png",
+      "128": "icons/extension-128.png"
     }
   },
   "options_ui": {

@@ -366,9 +366,6 @@ async function runPoll() {
       );
     }
 
-    await chrome.action.setBadgeText({ text: ok ? "V" : "X" });
-    await chrome.action.setBadgeBackgroundColor({ color: ok ? "#0d8050" : "#c03131" });
-
     for (const tabId of tabIds) {
       try {
         await chrome.scripting.executeScript({
@@ -517,7 +514,12 @@ function scheduleAlarm(delaySec) {
   chrome.alarms.create(ALARM, { delayInMinutes: delayMinutes });
 }
 
+function clearExtensionActionBadge() {
+  chrome.action.setBadgeText({ text: "" });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
+  clearExtensionActionBadge();
   loadSettings().then((s) => {
     scheduleAlarm(s.pollIntervalSec);
     runPoll().catch(() => {});
@@ -525,6 +527,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  clearExtensionActionBadge();
   loadSettings().then((s) => {
     scheduleAlarm(s.pollIntervalSec);
     runPoll().catch(() => {});
