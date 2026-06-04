@@ -13,32 +13,32 @@ export function apiRoot(baseUrl) {
  * @param {{ method?: string, body?: unknown }} [options]
  */
 async function gitlabFetch(url, token, options = {}) {
-  const { method = "GET", body } = options;
+  const { method = "GET", body: requestBody } = options;
   const headers = { Accept: "application/json" };
   if (token) headers["PRIVATE-TOKEN"] = token;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (requestBody !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(url, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: requestBody !== undefined ? JSON.stringify(requestBody) : undefined,
   });
   const text = await res.text();
-  let body = null;
+  let data = null;
   if (text) {
     try {
-      body = JSON.parse(text);
+      data = JSON.parse(text);
     } catch {
-      body = { raw: text };
+      data = { raw: text };
     }
   }
   if (!res.ok) {
     const msg =
-      body && typeof body === "object" && body.message
-        ? JSON.stringify(body.message)
+      data && typeof data === "object" && data.message
+        ? JSON.stringify(data.message)
         : text || res.statusText;
     throw new Error(`GitLab ${res.status}: ${msg}`);
   }
-  return body;
+  return data;
 }
 
 /** @param {string} projectPath */

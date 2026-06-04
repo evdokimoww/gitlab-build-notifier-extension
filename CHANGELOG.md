@@ -2,6 +2,18 @@
 
 Формат вдохновлён [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии по [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.1.2] — 2026-06-04
+
+### Исправлено
+
+- Убран inline-скрипт на `promote.html` (нарушал CSP расширения `script-src 'self'`).
+
+## [1.1.1] — 2026-06-04
+
+### Исправлено
+
+- Страница Promote MR не реагировала на «Запустить»: в `gitlab-api.js` дублировалось имя `body` в `gitlabFetch` (синтаксическая ошибка, модули не загружались).
+
 ## [1.1.0] — 2026-06-04
 
 ### Добавлено

@@ -119,6 +119,33 @@ async function loadFormPrefs() {
   return s;
 }
 
+function showBootError(message) {
+  const line = document.getElementById("statusLine");
+  if (line) {
+    line.textContent = "Ошибка: " + message;
+    line.className = "err";
+  }
+}
+
+function bindGlobalErrors() {
+  window.addEventListener("error", (e) => {
+    showBootError(e.message || "не удалось загрузить скрипт");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const line = document.getElementById("statusLine");
+    if (line && !line.textContent) {
+      showBootError(e.reason?.message || String(e.reason));
+    }
+  });
+}
+
+function init() {
+  bindGlobalErrors();
+  bindUi();
+  loadFormPrefs().catch((e) => setStatus(String(e), "err"));
+}
+
+function bindUi() {
 $("openOptions").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
@@ -156,6 +183,8 @@ $("run").addEventListener("click", async () => {
     return;
   }
 
+  setStatus("Запуск…", undefined);
+
   await saveFormPrefs();
 
   const settings = await chrome.storage.local.get({
@@ -164,6 +193,7 @@ $("run").addEventListener("click", async () => {
   });
 
   if (!settings.privateToken) {
+    appendLog("Нет токена — откройте настройки расширения.");
     setStatus("Нет токена — откройте настройки расширения.", "err");
     return;
   }
@@ -180,6 +210,7 @@ $("run").addEventListener("click", async () => {
   }
 
   $("log").textContent = "";
+  appendLog("Старт…");
   $("buildImageBlock").classList.remove("visible");
   $("buildImage").value = "";
   setRunning(true);
@@ -211,5 +242,10 @@ $("run").addEventListener("click", async () => {
     setRunning(false);
   }
 });
+}
 
-loadFormPrefs().catch((e) => setStatus(String(e), "err"));
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
