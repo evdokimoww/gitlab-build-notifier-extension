@@ -4,6 +4,7 @@
 
 ## Возможности
 
+- **Promote MR** — отдельная страница расширения (`promote.html`): цепочка feature → develop → production (как утилита `gitlab-promote-mr`), с логом, dry-run и копированием build-образа. Открывается из попапа («Promote MR») или по прямой ссылке на страницу расширения; для merge нужен токен с scope **`api`**.
 - Системное **уведомление** браузера с иконкой (успех / ошибка).
 - Опциональный **звуковой сигнал** (через offscreen-документ): **разные файлы** для успеха (`sounds/notify.wav`) и ошибки (`sounds/notify-fail.wav`) — при желании замените их своими WAV с теми же именами.
 - Префикс **`[CI OK]`** / **`[CI FAIL]`** в заголовке вкладки.
@@ -83,7 +84,9 @@
 | `background.js`     | Опрос, логика stage, уведомления, вызов звука и скриптов на вкладке. |
 | `gitlab-api.js`     | Обёртки над GitLab REST API v4. |
 | `options.html/js`   | Страница настроек. |
-| `popup.html/js`     | Краткий попап и ссылка на настройки. |
+| `promote.html/js`   | Promote MR (feature → develop → master/main). |
+| `gitlab-promote.js` | Логика promote (порт `gitlab-promote-mr.py`). |
+| `popup.html/js`     | Краткий попап, настройки и ссылка на promote. |
 | `offscreen.html/js` | Воспроизведение звука по URL из сообщения (успех / ошибка). |
 | `sounds/`           | `notify.wav` — успех; `notify-fail.wav` — ошибка (можно заменить своими). |
 | `icons/`            | `extension-*.png` — иконка расширения на основе GitLab tanuki; **`notify-ok.png`** / **`notify-fail.png`** — иконки уведомлений (RGBA). |
