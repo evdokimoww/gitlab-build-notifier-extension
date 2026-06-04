@@ -2,6 +2,13 @@
 
 Формат вдохновлён [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии по [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.1.0] — 2026-06-04
+
+### Добавлено
+
+- Страница **Promote MR** (`promote.html`): merge feature → develop, promote MR в master/main, ожидание pipeline, вывод build-образа (логика из `gitlab-promote-mr`).
+- Расширен `gitlab-api.js` методами merge/create MR, pipeline, артефакты и ветки.
+
 ## [1.0.8] — 2026-05-06
 
 ### Исправлено

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>GitLab — promote MR</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 720px;
+        margin: 24px auto;
+        padding: 0 16px 48px;
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin-bottom: 0.25rem;
+      }
+      .lead {
+        color: #555;
+        margin-top: 0;
+      }
+      label {
+        display: block;
+        margin-top: 14px;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 6px;
+        padding: 8px;
+        font: inherit;
+      }
+      .hint {
+        color: #666;
+        font-size: 0.88rem;
+        font-weight: normal;
+        margin-top: 4px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 20px;
+        margin-top: 8px;
+      }
+      .row label {
+        margin-top: 0;
+        font-weight: normal;
+      }
+      .actions {
+        margin-top: 18px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 10px 18px;
+        cursor: pointer;
+        font: inherit;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      #log {
+        margin-top: 20px;
+        padding: 12px;
+        min-height: 160px;
+        max-height: 360px;
+        overflow: auto;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        background: #f4f4f5;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      @media (prefers-color-scheme: dark) {
+        #log {
+          background: #1e1e1e;
+          border-color: #444;
+        }
+        .lead,
+        .hint {
+          color: #aaa;
+        }
+      }
+      #buildImageBlock {
+        margin-top: 16px;
+        display: none;
+      }
+      #buildImageBlock.visible {
+        display: block;
+      }
+      #buildImage {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .nav {
+        margin-bottom: 20px;
+        font-size: 0.95rem;
+      }
+      .nav a {
+        color: #1068bf;
+        margin-right: 14px;
+      }
+      #statusLine {
+        margin-top: 10px;
+        min-height: 1.4em;
+      }
+      .ok {
+        color: #0d8050;
+      }
+      .err {
+        color: #b00020;
+      }
+      .warn {
+        color: #9a6700;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav">
+      <a href="#" id="openOptions">Настройки (URL и токен)</a>
+      <a href="popup.html" id="openPopup">Попап расширения</a>
+    </nav>
+
+    <h1>Promote MR → develop → master/main</h1>
+    <p class="lead">
+      Цепочка как в <code>gitlab-promote-mr</code>: merge feature в develop, promote MR в production,
+      ожидание pipeline, вывод build-образа. Токен и хост берутся из настроек расширения (нужен scope
+      <code>api</code>).
+    </p>
+
+    <label>
+      Merge request
+      <input
+        type="text"
+        id="mrArg"
+        placeholder="https://git…/group/repo/-/merge_requests/42 или group/repo!42"
+        autocomplete="off"
+      />
+    </label>
+
+    <label>
+      Production-ветка (опционально)
+      <input type="text" id="productionBranch" placeholder="main, master или hmao/main" />
+      <span class="hint">Пусто — автоопределение по веткам в репозитории</span>
+    </label>
+
+    <div class="row">
+      <label><input type="checkbox" id="dryRun" /> Dry run (без merge API)</label>
+      <label><input type="checkbox" id="waitFeaturePipeline" /> Ждать pipeline feature MR</label>
+      <label><input type="checkbox" id="stopAfterFeature" /> Только feature → develop</label>
+      <label><input type="checkbox" id="stopAfterPromoteMr" /> Остановиться после создания promote MR</label>
+      <label><input type="checkbox" id="skipBuildImage" /> Не ждать build / образ</label>
+    </div>
+
+    <label>
+      Стадия CI для образа
+      <input type="text" id="buildStage" value="build" />
+    </label>
+
+    <div class="row">
+      <label>
+        Таймаут pipeline (с)
+        <input type="number" id="pipelineTimeout" min="60" max="86400" value="7200" />
+      </label>
+      <label>
+        Интервал опроса (с)
+        <input type="number" id="pollInterval" min="5" max="120" value="20" />
+      </label>
+    </div>
+
+    <div class="actions">
+      <button type="button" id="run">Запустить</button>
+      <button type="button" id="cancel" disabled>Отменить</button>
+      <button type="button" id="clearLog">Очистить лог</button>
+    </div>
+
+    <p id="statusLine"></p>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <div id="buildImageBlock">
+      <label>
+        Build image
+        <input type="text" id="buildImage" readonly />
+      </label>
+      <button type="button" id="copyImage">Копировать</button>
+    </div>
+
+    <script src="promote.js" type="module"></script>
+  </body>
+</html>
