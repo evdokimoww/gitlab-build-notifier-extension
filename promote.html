@@ -7,12 +7,20 @@
       :root {
         color-scheme: light dark;
       }
+      html,
+      body {
+        height: 100%;
+      }
       body {
         font-family: system-ui, sans-serif;
-        max-width: 720px;
-        margin: 24px auto;
-        padding: 0 16px 48px;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 20px 16px 32px;
         line-height: 1.5;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
       }
       h1 {
         font-size: 1.35rem;
@@ -21,6 +29,7 @@
       .lead {
         color: #555;
         margin-top: 0;
+        margin-bottom: 1rem;
       }
       label {
         display: block;
@@ -28,12 +37,19 @@
         font-weight: 600;
       }
       input[type="text"],
-      input[type="number"] {
+      input[type="number"],
+      textarea {
         width: 100%;
         box-sizing: border-box;
         margin-top: 6px;
         padding: 8px;
         font: inherit;
+      }
+      textarea {
+        min-height: 72px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        resize: vertical;
       }
       .hint {
         color: #666;
@@ -41,21 +57,41 @@
         font-weight: normal;
         margin-top: 4px;
       }
-      .row {
+      .accordion {
+        margin-top: 12px;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 12px 30px;
+        background: #fafafa;
+      }
+      .accordion > summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 12px 4px;
+        list-style-position: outside;
+      }
+      .accordion[open] > summary {
+        margin-bottom: 4px;
+      }
+      .accordion .row {
         display: flex;
         flex-wrap: wrap;
         gap: 12px 20px;
         margin-top: 8px;
       }
-      .row label {
+      .accordion .row label {
         margin-top: 0;
         font-weight: normal;
       }
+      .accordion label {
+        margin-top: 12px;
+      }
       .actions {
-        margin-top: 18px;
+        margin-top: 16px;
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        align-items: center;
       }
       button {
         padding: 10px 18px;
@@ -66,11 +102,23 @@
         opacity: 0.55;
         cursor: not-allowed;
       }
+      button.primary {
+        font-weight: 600;
+      }
+      #logPanel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        margin-top: 12px;
+      }
       #log {
-        margin-top: 20px;
-        padding: 12px;
-        min-height: 160px;
-        max-height: 360px;
+        flex: 1;
+        margin: 0;
+        padding: 14px;
+        min-height: 420px;
+        height: calc(100vh - 340px);
+        max-height: 720px;
         overflow: auto;
         font-family: ui-monospace, monospace;
         font-size: 12px;
@@ -86,6 +134,10 @@
           background: #1e1e1e;
           border-color: #444;
         }
+        .accordion {
+          background: #1a1a1a;
+          border-color: #444;
+        }
         .lead,
         .hint {
           color: #aaa;
@@ -94,6 +146,8 @@
       #buildImageBlock {
         margin-top: 16px;
         display: none;
+        padding-top: 12px;
+        border-top: 1px solid #ddd;
       }
       #buildImageBlock.visible {
         display: block;
@@ -105,8 +159,14 @@
         font-family: ui-monospace, monospace;
         font-size: 12px;
       }
+      .build-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
       .nav {
-        margin-bottom: 20px;
+        margin-bottom: 12px;
         font-size: 0.95rem;
       }
       .nav a {
@@ -114,8 +174,9 @@
         margin-right: 14px;
       }
       #statusLine {
-        margin-top: 10px;
+        margin-top: 8px;
         min-height: 1.4em;
+        flex-shrink: 0;
       }
       .ok {
         color: #0d8050;
@@ -126,6 +187,79 @@
       .warn {
         color: #9a6700;
       }
+      .main-fields {
+        flex-shrink: 0;
+      }
+      .session-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+        padding: 10px 0 4px;
+        border-top: 1px solid #ddd;
+      }
+      .session-bar[hidden] {
+        display: none;
+      }
+      .session-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border: 1px solid #ccc;
+        border-radius: 999px;
+        background: #fff;
+        font-size: 12px;
+        max-width: 100%;
+      }
+      .session-tab--active {
+        border-color: #1068bf;
+        box-shadow: 0 0 0 1px #1068bf;
+      }
+      .session-tab--running {
+        border-color: #1068bf;
+      }
+      .session-tab--success {
+        border-color: #0d8050;
+      }
+      .session-tab--error,
+      .session-tab--stale {
+        border-color: #b00020;
+      }
+      .session-tab--cancelled {
+        border-color: #9a6700;
+      }
+      .session-tab-label {
+        font-weight: 600;
+        font-family: ui-monospace, monospace;
+      }
+      .session-tab-badge {
+        color: #666;
+        font-size: 11px;
+      }
+      .session-tab-close {
+        margin-left: 2px;
+        padding: 0 4px;
+        cursor: pointer;
+        opacity: 0.55;
+        font-size: 14px;
+        line-height: 1;
+      }
+      .session-tab-close:hover {
+        opacity: 1;
+      }
+      @media (prefers-color-scheme: dark) {
+        .session-bar {
+          border-color: #444;
+        }
+        .session-tab {
+          background: #2a2a2a;
+          border-color: #555;
+        }
+        .session-tab-badge {
+          color: #aaa;
+        }
+      }
     </style>
   </head>
   <body>
@@ -134,69 +268,94 @@
       <a href="popup.html" id="openPopup">Попап расширения</a>
     </nav>
 
-    <h1>Promote MR → develop → master/main</h1>
-    <p class="lead">
-      Цепочка как в <code>gitlab-promote-mr</code>: merge feature в develop, promote MR в production,
-      ожидание pipeline, вывод build-образа. Токен и хост берутся из настроек расширения (нужен scope
-      <code>api</code>).
-    </p>
+    <div class="main-fields">
+      <h1>Promote MR → develop → master/main</h1>
+      <p class="lead">
+        Merge feature в develop, promote в production, build-образ. Токен и хост — в настройках
+        (<code>api</code>). Несколько MR можно запускать параллельно — у каждого своя вкладка-сессия.
+        Процессы идут в фоне; страницу можно обновить. История — во вкладках сессий (клик по вкладке).
+      </p>
 
-    <label>
-      Merge request
-      <input
-        type="text"
-        id="mrArg"
-        placeholder="https://git…/group/repo/-/merge_requests/42 или group/repo!42"
-        autocomplete="off"
-      />
-    </label>
-
-    <label>
-      Production-ветка (опционально)
-      <input type="text" id="productionBranch" placeholder="main, master или hmao/main" />
-      <span class="hint">Пусто — автоопределение по веткам в репозитории</span>
-    </label>
-
-    <div class="row">
-      <label><input type="checkbox" id="dryRun" /> Dry run (без merge API)</label>
-      <label><input type="checkbox" id="waitFeaturePipeline" /> Ждать pipeline feature MR</label>
-      <label><input type="checkbox" id="stopAfterFeature" /> Только feature → develop</label>
-      <label><input type="checkbox" id="stopAfterPromoteMr" /> Остановиться после создания promote MR</label>
-      <label><input type="checkbox" id="skipBuildImage" /> Не ждать build / образ</label>
-    </div>
-
-    <label>
-      Стадия CI для образа
-      <input type="text" id="buildStage" value="build" />
-    </label>
-
-    <div class="row">
       <label>
-        Таймаут pipeline (с)
-        <input type="number" id="pipelineTimeout" min="60" max="86400" value="7200" />
+        Merge request
+        <input
+          type="text"
+          id="mrArg"
+          placeholder="https://git…/group/repo/-/merge_requests/42 или group/repo!42"
+          autocomplete="off"
+        />
       </label>
+
       <label>
-        Интервал опроса (с)
-        <input type="number" id="pollInterval" min="5" max="120" value="20" />
+        Ещё MR в ту же develop-ветку (опционально)
+        <textarea
+          id="mrBatch"
+          placeholder="По одному на строку — сольются по порядку перед promote&#10;group/repo!43&#10;group/repo!44"
+        ></textarea>
+        <span class="hint"
+          >Все MR — один проект и одна target-ветка (develop). При конфликте — уведомление и
+          остановка.</span
+        >
       </label>
+
+      <details class="accordion" id="extraOptions">
+        <summary>Дополнительные опции</summary>
+
+        <label>
+          Production-ветка (опционально)
+          <input type="text" id="productionBranch" placeholder="main, master или hmao/main" />
+          <span class="hint">Пусто — автоопределение по веткам в репозитории</span>
+        </label>
+
+        <div class="row">
+          <label><input type="checkbox" id="dryRun" /> Dry run (без merge API)</label>
+          <label><input type="checkbox" id="waitFeaturePipeline" /> Ждать pipeline feature MR</label>
+          <label><input type="checkbox" id="stopAfterFeature" /> Только feature → develop</label>
+          <label><input type="checkbox" id="stopAfterPromoteMr" /> Остановиться после создания promote MR</label>
+          <label><input type="checkbox" id="skipBuildImage" /> Не ждать build / образ</label>
+        </div>
+
+        <label>
+          Стадия CI для образа
+          <input type="text" id="buildStage" value="build" />
+        </label>
+
+        <div class="row">
+          <label>
+            Таймаут pipeline (с)
+            <input type="number" id="pipelineTimeout" min="60" max="86400" value="7200" />
+            <span class="hint">По умолчанию 2 ч — хватает на сборки 30+ мин</span>
+          </label>
+          <label>
+            Интервал опроса (с)
+            <input type="number" id="pollInterval" min="5" max="120" value="20" />
+          </label>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button type="button" id="run" class="primary">Запустить</button>
+        <button type="button" id="cancel" disabled>Отменить</button>
+      </div>
+
+      <p id="statusLine"></p>
+
+      <div id="sessionBar" class="session-bar" hidden aria-label="Сессии promote"></div>
     </div>
 
-    <div class="actions">
-      <button type="button" id="run">Запустить</button>
-      <button type="button" id="cancel" disabled>Отменить</button>
-      <button type="button" id="clearLog">Очистить лог</button>
+    <div id="logPanel">
+      <pre id="log" aria-live="polite"></pre>
     </div>
-
-    <p id="statusLine"></p>
-
-    <pre id="log" aria-live="polite"></pre>
 
     <div id="buildImageBlock">
       <label>
         Build image
         <input type="text" id="buildImage" readonly />
       </label>
-      <button type="button" id="copyImage">Копировать</button>
+      <div class="build-actions">
+        <button type="button" id="copyImage">Копировать образ</button>
+        <button type="button" id="newMr" class="primary" hidden>Новый MR</button>
+      </div>
     </div>
 
     <script src="promote.js" type="module"></script>

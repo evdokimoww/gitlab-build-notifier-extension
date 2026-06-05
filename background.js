@@ -5,6 +5,23 @@ import {
   getPipelineJob,
   listPipelineJobs,
 } from "./gitlab-api.js";
+import {
+  acceptPromoteStart,
+  cancelPromoteRun,
+  dismissPromoteSession,
+  getActivePromoteSession,
+  getPromoteSession,
+  listPromoteSessions,
+  PROMOTE_KEEPALIVE_ALARM,
+  promoteKeepaliveTick,
+  reconcileStalePromoteSession,
+  resetPromoteSession,
+  setActivePromoteSession,
+} from "./promote-runner.js";
+
+reconcileStalePromoteSession().catch((e) =>
+  console.warn("[gitlab-notifier] promote reconcile", e)
+);
 
 const ALARM = "gitlab-ci-poll";
 
@@ -601,6 +618,10 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === PROMOTE_KEEPALIVE_ALARM) {
+    promoteKeepaliveTick().catch((e) => console.warn("[gitlab-notifier] promote keepalive", e));
+    return;
+  }
   if (a.name !== ALARM) return;
   runPoll()
     .catch((e) => console.warn("[gitlab-notifier] poll", e))
@@ -637,4 +658,76 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     const toRemove = Object.keys(all).filter((k) => k.startsWith(prefix));
     if (toRemove.length) chrome.storage.session.remove(toRemove);
   });
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || typeof msg.type !== "string") return;
+
+  if (msg.type === "promote-get-sessions") {
+    reconcileStalePromoteSession()
+      .then(async () => {
+        const sessions = await listPromoteSessions();
+        const { state } = await getActivePromoteSession();
+        sendResponse({ ok: true, sessions, activeId: state.activeId });
+      })
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
+  if (msg.type === "promote-get-session") {
+    reconcileStalePromoteSession()
+      .then((session) => sendResponse({ ok: true, session }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
+  if (msg.type === "promote-set-active") {
+    setActivePromoteSession(msg.sessionId)
+      .then((session) => sendResponse({ ok: true, session }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
+  if (msg.type === "promote-dismiss") {
+    dismissPromoteSession(msg.sessionId)
+      .then((activeId) => sendResponse({ ok: true, activeId }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
+  if (msg.type === "promote-start") {
+    (async () => {
+      try {
+        const settings = await chrome.storage.local.get({
+          gitlabBaseUrl: "https://git-02.t1-group.ru",
+          privateToken: "",
+        });
+        if (!settings.privateToken) {
+          sendResponse({ ok: false, error: "Нет токена в настройках" });
+          return;
+        }
+        const result = await acceptPromoteStart(msg.form, {
+          gitlabBaseUrl: settings.gitlabBaseUrl,
+          privateToken: settings.privateToken,
+        });
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === "promote-cancel") {
+    cancelPromoteRun(msg.sessionId);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "promote-reset") {
+    resetPromoteSession()
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
 });

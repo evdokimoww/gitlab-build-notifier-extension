@@ -152,6 +152,26 @@ export async function listMrPipelines(apiBase, token, projectPath, mrIid) {
 }
 
 /**
+ * Pipeline для merge request (merge_request_event).
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function createMrPipeline(apiBase, token, projectPath, mrIid) {
+  const pid = encodeProjectPath(projectPath);
+  const url = `${apiBase}projects/${pid}/merge_requests/${mrIid}/pipelines`;
+  return gitlabFetch(url, token, { method: "POST", body: {} });
+}
+
+/**
+ * Pipeline на ветке / теге (ref).
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function createRefPipeline(apiBase, token, projectPath, ref) {
+  const pid = encodeProjectPath(projectPath);
+  const url = `${apiBase}projects/${pid}/pipeline`;
+  return gitlabFetch(url, token, { method: "POST", body: { ref } });
+}
+
+/**
  * @returns {Promise<Record<string, unknown>[]>}
  */
 export async function listPipelinesForRef(

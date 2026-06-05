@@ -4,7 +4,7 @@
 
 ## Возможности
 
-- **Promote MR** — отдельная страница расширения (`promote.html`): цепочка feature → develop → production (как утилита `gitlab-promote-mr`), с логом, dry-run и копированием build-образа. Открывается из попапа («Promote MR») или по прямой ссылке на страницу расширения; для merge нужен токен с scope **`api`**.
+- **Promote MR** — отдельная страница (`promote.html`): цепочка feature → develop → production, несколько параллельных сессий (вкладки), лог и build-образ по каждой. Фон service worker — вкладку можно обновить. Токен с scope **`api`**.
 - Системное **уведомление** браузера с иконкой (успех / ошибка).
 - Опциональный **звуковой сигнал** (через offscreen-документ): **разные файлы** для успеха (`sounds/notify.wav`) и ошибки (`sounds/notify-fail.wav`) — при желании замените их своими WAV с теми же именами.
 - Префикс **`[CI OK]`** / **`[CI FAIL]`** в заголовке вкладки.
@@ -86,6 +86,7 @@
 | `options.html/js`   | Страница настроек. |
 | `promote.html/js`   | Promote MR (feature → develop → master/main). |
 | `gitlab-promote.js` | Логика promote (порт `gitlab-promote-mr.py`). |
+| `promote-runner.js` | Фоновый запуск promote и сохранение сессии. |
 | `popup.html/js`     | Краткий попап, настройки и ссылка на promote. |
 | `offscreen.html/js` | Воспроизведение звука по URL из сообщения (успех / ошибка). |
 | `sounds/`           | `notify.wav` — успех; `notify-fail.wav` — ошибка (можно заменить своими). |

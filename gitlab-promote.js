@@ -7,6 +7,8 @@ import {
   apiRoot,
   branchExists,
   createMergeRequest,
+  createMrPipeline,
+  createRefPipeline,
   getJobArtifact,
   getJobTrace,
   getMergeRequest,
@@ -18,6 +20,19 @@ import {
   mergeMergeRequest,
 } from "./gitlab-api.js";
 
+/** Pipeline ещё выполняется или только создаётся. */
+const PIPELINE_ACTIVE = new Set([
+  "created",
+  "pending",
+  "running",
+  "waiting_for_resource",
+  "preparing",
+  "scheduled",
+  "manual",
+  "playing",
+  "canceling",
+]);
+
 const MR_URL_RE =
   /(?:https?:\/\/)?[^/]+\/(?<project>.+?)\/-\/merge_requests\/(?<iid>\d+)/i;
 const MR_REF_RE = /^(?<project>.+?)!(?<iid>\d+)$/;
@@ -28,8 +43,20 @@ const PRODUCTION_SUFFIXES = ["master", "main"];
 /**
  * @typedef {{ project: string, iid: number }} MrRef
  * @typedef {(line: string) => void} LogFn
- * @typedef {{ signal?: AbortSignal, log?: LogFn, onBuildImage?: (image: string) => void }} PromoteHooks
+ * @typedef {{ signal?: AbortSignal, log?: LogFn, heartbeat?: () => void, onBuildImage?: (image: string) => void, onConflict?: (mr: Record<string, unknown>, message: string) => void }} PromoteHooks
  */
+
+export class MrMergeConflictError extends Error {
+  /**
+   * @param {Record<string, unknown>} mr
+   * @param {string} message
+   */
+  constructor(mr, message) {
+    super(message);
+    this.name = "MrMergeConflictError";
+    this.mr = mr;
+  }
+}
 
 /**
  * @param {string} arg
@@ -49,6 +76,37 @@ export function parseMrArg(arg) {
     `Не удалось разобрать ссылку на MR: ${arg}\n` +
       "Используйте URL, group/project!123 или полный URL merge request."
   );
+}
+
+/**
+ * @param {string} primary
+ * @param {string} [batchText]
+ * @returns {MrRef[]}
+ */
+export function parseMrArgList(primary, batchText) {
+  const lines = [];
+  if (primary?.trim()) lines.push(primary.trim());
+  if (batchText?.trim()) {
+    for (const line of batchText.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      lines.push(t);
+    }
+  }
+  if (!lines.length) {
+    throw new Error("Укажите хотя бы один merge request");
+  }
+
+  const refs = lines.map(parseMrArg);
+  const seen = new Set();
+  const unique = [];
+  for (const ref of refs) {
+    const key = `${ref.project}!${ref.iid}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(ref);
+  }
+  return unique;
 }
 
 /**
@@ -104,6 +162,31 @@ function buildProductionBranch(prefix, suffix) {
 
 function checkAborted(signal) {
   if (signal?.aborted) throw new DOMException("Отменено", "AbortError");
+}
+
+/** Периодический лог при долгом ожидании pipeline (мин). */
+const WAIT_PROGRESS_LOG_MS = 5 * 60 * 1000;
+
+/**
+ * @param {{ heartbeat?: () => void }} ctx
+ */
+function pulseWait(ctx) {
+  ctx.heartbeat?.();
+}
+
+/**
+ * @param {{ log: LogFn }} ctx
+ * @returns {number}
+ */
+function maybeLogWaitProgress(
+  ctx,
+  { label, pid, status, waitStartedAt, lastProgressLogAt }
+) {
+  const now = Date.now();
+  if (now - lastProgressLogAt < WAIT_PROGRESS_LOG_MS) return lastProgressLogAt;
+  const mins = Math.floor((now - waitStartedAt) / 60000);
+  ctx.log(`  ${label} #${pid}: ${status} (${mins} мин ожидания)`);
+  return now;
 }
 
 function sleep(ms, signal) {
@@ -202,19 +285,92 @@ export async function resolveProductionBranch(
  * @param {() => Promise<Record<string, unknown>[]>} fetchPipelines
  * @param {AbortSignal} [signal]
  */
+/**
+ * @param {Record<string, unknown>} mr
+ */
+async function ensureMrPipelineStarted(
+  apiBase,
+  token,
+  project,
+  mr,
+  { dryRun, log, signal }
+) {
+  if (dryRun) return;
+
+  const iid = Number(mr.iid);
+  checkAborted(signal);
+  const pipelines = await listMrPipelines(apiBase, token, project, iid);
+  if (pipelines.some((p) => PIPELINE_ACTIVE.has(String(p.status)))) return;
+
+  log(`MR !${iid}: pipeline не запущен, запуск…`);
+  try {
+    const created = await createMrPipeline(apiBase, token, project, iid);
+    log(`  создан MR pipeline #${created.id}`);
+  } catch (firstErr) {
+    const sourceBranch = String(mr.source_branch || "");
+    if (!sourceBranch) throw firstErr;
+    log(`  запуск pipeline на ветке ${JSON.stringify(sourceBranch)}…`);
+    const created = await createRefPipeline(apiBase, token, project, sourceBranch);
+    log(`  создан branch pipeline #${created.id}`);
+  }
+  await sleep(3000, signal);
+}
+
+/**
+ * @param {number | null} afterPipelineId
+ */
+async function ensureBranchPipelineStarted(
+  apiBase,
+  token,
+  project,
+  ref,
+  afterPipelineId,
+  { dryRun, log, signal }
+) {
+  if (dryRun) return;
+
+  checkAborted(signal);
+  const pipelines = await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 });
+
+  const hasRelevantActive = pipelines.some((p) => {
+    const pid = Number(p.id);
+    if (afterPipelineId != null && pid <= afterPipelineId) return false;
+    return PIPELINE_ACTIVE.has(String(p.status));
+  });
+  if (hasRelevantActive) return;
+
+  const hasNewer = pipelines.some((p) => afterPipelineId == null || Number(p.id) > afterPipelineId);
+  if (hasNewer) return;
+
+  log(`Ветка ${JSON.stringify(ref)}: pipeline не запущен, запуск…`);
+  const created = await createRefPipeline(apiBase, token, project, ref);
+  log(`  создан branch pipeline #${created.id}`);
+  await sleep(3000, signal);
+}
+
 async function waitPipelineLoop(
   fetchPipelines,
-  { timeoutSec, pollSec, log, label, signal }
+  { timeoutSec, pollSec, log, label, signal, onNoPipeline, heartbeat }
 ) {
+  const ctx = { log, heartbeat };
   const terminalOk = new Set(["success"]);
   const terminalBad = new Set(["failed", "canceled", "skipped"]);
   const deadline = Date.now() + timeoutSec * 1000;
   let seen = null;
+  let triedStart = false;
+  let waitStartedAt = Date.now();
+  let lastProgressLogAt = 0;
 
   while (Date.now() < deadline) {
     checkAborted(signal);
+    pulseWait(ctx);
     const pipelines = await fetchPipelines();
     if (!pipelines.length) {
+      if (!triedStart && onNoPipeline) {
+        triedStart = true;
+        await onNoPipeline();
+        continue;
+      }
       log(`  ${label}: ожидание первого pipeline…`);
       await sleep(pollSec * 1000, signal);
       continue;
@@ -224,7 +380,17 @@ async function waitPipelineLoop(
     const status = String(latest.status);
     if (pid !== seen) {
       seen = pid;
+      waitStartedAt = Date.now();
+      lastProgressLogAt = waitStartedAt;
       log(`  ${label} #${pid}: ${status}`);
+    } else {
+      lastProgressLogAt = maybeLogWaitProgress(ctx, {
+        label,
+        pid,
+        status,
+        waitStartedAt,
+        lastProgressLogAt,
+      });
     }
     if (terminalOk.has(status)) return pid;
     if (terminalBad.has(status)) {
@@ -249,14 +415,37 @@ async function waitBranchPipeline(
   project,
   ref,
   afterPipelineId,
-  { timeoutSec, pollSec, log, signal }
+  { timeoutSec, pollSec, log, signal, dryRun, heartbeat }
 ) {
+  const ctx = { log, heartbeat };
+  if (!dryRun) {
+    await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
+      dryRun,
+      log,
+      signal,
+    });
+  }
+
   const deadline = Date.now() + timeoutSec * 1000;
+  let triedStart = false;
+  let seenKey = "";
+  let waitStartedAt = Date.now();
+  let lastProgressLogAt = 0;
 
   while (Date.now() < deadline) {
     checkAborted(signal);
+    pulseWait(ctx);
     const pipelines = await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 });
     if (!pipelines.length) {
+      if (!triedStart && !dryRun) {
+        triedStart = true;
+        await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
+          dryRun,
+          log,
+          signal,
+        });
+        continue;
+      }
       log(`  branch pipeline: ожидание pipeline на ${JSON.stringify(ref)}…`);
       await sleep(pollSec * 1000, signal);
       continue;
@@ -271,6 +460,15 @@ async function waitBranchPipeline(
     }
 
     if (!candidate) {
+      if (!triedStart && !dryRun) {
+        triedStart = true;
+        await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
+          dryRun,
+          log,
+          signal,
+        });
+        continue;
+      }
       log(
         `  branch pipeline: ожидание нового pipeline на ${JSON.stringify(ref)} ` +
           `(после #${afterPipelineId})…`
@@ -281,7 +479,21 @@ async function waitBranchPipeline(
 
     const pid = Number(candidate.id);
     const status = String(candidate.status);
-    log(`  branch pipeline #${pid} на ${ref}: ${status}`);
+    const key = `${pid}:${status}`;
+    if (key !== seenKey) {
+      seenKey = key;
+      waitStartedAt = Date.now();
+      lastProgressLogAt = waitStartedAt;
+      log(`  branch pipeline #${pid} на ${ref}: ${status}`);
+    } else {
+      lastProgressLogAt = maybeLogWaitProgress(ctx, {
+        label: `branch pipeline ${ref}`,
+        pid,
+        status,
+        waitStartedAt,
+        lastProgressLogAt,
+      });
+    }
 
     if (status === "success") return pid;
     if (["failed", "canceled", "skipped"].includes(status)) {
@@ -396,25 +608,103 @@ export async function extractBuildImage(
 
 /**
  * @param {Record<string, unknown>} mr
- * @param {string} label
  */
-function ensureMergeable(mr, label) {
+export function mrHasConflict(mr) {
+  if (mr.has_conflicts === true) return true;
+  const detailed = String(mr.detailed_merge_status || "");
+  if (detailed === "conflict" || detailed === "cannot_be_merged") return true;
+  const mergeStatus = String(mr.merge_status || "");
+  return mergeStatus === "cannot_be_merged" || mergeStatus === "broken";
+}
+
+/**
+ * @param {string} apiBase
+ * @param {string} token
+ * @param {string} project
+ * @param {number} iid
+ * @param {AbortSignal} [signal]
+ */
+async function refreshMergeRequest(apiBase, token, project, iid, signal) {
+  checkAborted(signal);
+  return getMergeRequest(apiBase, token, project, iid);
+}
+
+/**
+ * @param {Record<string, unknown>} mr
+ * @param {string} label
+ * @param {PromoteHooks} [hooks]
+ */
+function throwIfConflict(mr, label, hooks) {
+  if (!mrHasConflict(mr)) return;
+  const target = String(mr.target_branch || "");
+  const msg =
+    `${label} MR !${mr.iid}: конфликт при слиянии в ${target}` +
+    (mr.web_url ? ` — ${mr.web_url}` : "");
+  hooks?.onConflict?.(mr, msg);
+  throw new MrMergeConflictError(mr, msg);
+}
+
+/**
+ * @param {Record<string, unknown>} mr
+ * @param {string} label
+ * @param {PromoteHooks} [hooks]
+ */
+function ensureMergeable(mr, label, hooks) {
   const state = String(mr.state);
   if (state === "merged") return;
   if (state !== "opened") {
     throw new Error(`${label} MR !${mr.iid} в состоянии ${state}, ожидался opened/merged`);
   }
+  throwIfConflict(mr, label, hooks);
   const mergeStatus = mr.merge_status || mr.detailed_merge_status;
-  if (mergeStatus === "cannot_be_merged" || mergeStatus === "broken") {
-    throw new Error(
-      `${label} MR !${mr.iid} нельзя смержить (status: ${mergeStatus})`
-    );
+  if (mergeStatus === "checking") {
+    return;
   }
+  if (mergeStatus === "cannot_be_merged" || mergeStatus === "broken") {
+    throwIfConflict(mr, label, hooks);
+    throw new Error(`${label} MR !${mr.iid} нельзя смержить (status: ${mergeStatus})`);
+  }
+}
+
+/**
+ * @param {string} apiBase
+ * @param {string} token
+ * @param {MrRef[]} refs
+ * @param {AbortSignal} [signal]
+ */
+async function loadAndValidateBatch(apiBase, token, refs, signal) {
+  const mrs = [];
+  for (const ref of refs) {
+    checkAborted(signal);
+    const mr = await getMergeRequest(apiBase, token, ref.project, ref.iid);
+    requireDevelopTarget(String(mr.target_branch));
+    mrs.push({ ref, mr });
+  }
+
+  const project = refs[0].project;
+  const developBranch = String(mrs[0].mr.target_branch);
+
+  for (let i = 1; i < mrs.length; i++) {
+    if (refs[i].project !== project) {
+      throw new Error(
+        `MR !${refs[i].iid} в проекте ${refs[i].project}, ожидался ${project}`
+      );
+    }
+    const target = String(mrs[i].mr.target_branch);
+    if (target !== developBranch) {
+      throw new Error(
+        `MR !${refs[i].iid} target ${target} ≠ ${developBranch} — все MR должны идти в одну develop-ветку`
+      );
+    }
+  }
+
+  return { project, developBranch, mrs };
 }
 
 /**
  * @typedef {Object} PromoteOptions
  * @property {string} mrArg
+ * @property {string} [mrBatch]
  * @property {boolean} [dryRun]
  * @property {boolean} [waitFeaturePipeline]
  * @property {boolean} [stopAfterFeature]
@@ -435,26 +725,31 @@ function ensureMergeable(mr, label) {
  */
 export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   const log = hooks.log || (() => {});
+  const heartbeat = hooks.heartbeat || (() => {});
   const signal = hooks.signal;
 
   if (!token?.trim()) {
     throw new Error("Укажите Personal Access Token в настройках (нужен scope api)");
   }
 
-  const ref = parseMrArg(options.mrArg);
+  const refs = parseMrArgList(options.mrArg, options.mrBatch);
   const apiBase = apiRoot(apiBaseUrl);
   const dryRun = Boolean(options.dryRun);
   const pipelineTimeout = options.pipelineTimeoutSec ?? 7200;
   const pollSec = options.pollIntervalSec ?? 20;
   const buildStage = (options.buildStage || "build").trim();
 
-  log(`Проект: ${ref.project}`);
-  log(`Feature MR: !${ref.iid}`);
+  log(`Проект: ${refs[0].project}`);
+  if (refs.length === 1) {
+    log(`Feature MR: !${refs[0].iid}`);
+  } else {
+    log(`Feature MR (${refs.length}): ${refs.map((r) => `!${r.iid}`).join(", ")}`);
+  }
 
   checkAborted(signal);
-  let featureMr = await getMergeRequest(apiBase, token, ref.project, ref.iid);
-  const developBranch = String(featureMr.target_branch);
-  requireDevelopTarget(developBranch);
+  const batch = await loadAndValidateBatch(apiBase, token, refs, signal);
+  const { project, developBranch, mrs } = batch;
+  let featureMr = mrs[mrs.length - 1].mr;
 
   let productionBranch;
   const productionOverride = options.productionBranch?.trim() || "";
@@ -468,7 +763,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     productionBranch = await resolveProductionBranch(
       apiBase,
       token,
-      ref.project,
+      project,
       developBranch,
       productionOverride || undefined,
       signal
@@ -479,28 +774,42 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   log(`Production: ${productionBranch}`);
   if (dryRun) log("--- dry run ---");
 
-  featureMr = await mergeIfNeeded(apiBase, token, ref.project, featureMr, {
-    dryRun,
-    label: "Feature",
-    waitPipelineBefore: Boolean(options.waitFeaturePipeline),
-    pipelineTimeout,
-    pollSec,
-    log,
-    signal,
-  });
+  for (let i = 0; i < mrs.length; i++) {
+    const { ref: mrRef, mr: initialMr } = mrs[i];
+    const label =
+      mrs.length > 1 ? `Feature ${i + 1}/${mrs.length}` : "Feature";
 
-  if (!dryRun && String(featureMr.state) !== "merged") {
     checkAborted(signal);
-    featureMr = await getMergeRequest(apiBase, token, ref.project, ref.iid);
+    let mr = await refreshMergeRequest(apiBase, token, project, mrRef.iid, signal);
+    throwIfConflict(mr, label, hooks);
+    ensureMergeable(mr, label, hooks);
+
+    mr = await mergeIfNeeded(apiBase, token, project, mr, {
+      dryRun,
+      label,
+      waitPipelineBefore: Boolean(options.waitFeaturePipeline),
+      pipelineTimeout,
+      pollSec,
+      log,
+      heartbeat,
+      signal,
+      hooks,
+    });
+
+    if (!dryRun && String(mr.state) !== "merged") {
+      checkAborted(signal);
+      mr = await refreshMergeRequest(apiBase, token, project, mrRef.iid, signal);
+    }
+    if (mr.web_url) log(`${label}: ${mr.web_url}`);
+    featureMr = mr;
   }
-  if (featureMr.web_url) log(`Feature MR: ${featureMr.web_url}`);
 
   if (options.stopAfterFeature) {
     log("Остановка после merge feature → develop.");
     return {};
   }
 
-  let promoteMr = await getOrCreatePromoteMr(apiBase, token, ref.project, {
+  let promoteMr = await getOrCreatePromoteMr(apiBase, token, project, {
     developBranch,
     productionBranch,
     dryRun,
@@ -510,7 +819,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
 
   if (!dryRun) {
     checkAborted(signal);
-    promoteMr = await getMergeRequest(apiBase, token, ref.project, Number(promoteMr.iid));
+    promoteMr = await getMergeRequest(apiBase, token, project, Number(promoteMr.iid));
   }
   log(`Promote MR: !${promoteMr.iid} (${promoteMr.web_url || ""})`);
 
@@ -522,37 +831,51 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   let lastPipelineBeforeMerge = null;
   if (!dryRun) {
     checkAborted(signal);
-    const pipelines = await listPipelinesForRef(apiBase, token, ref.project, productionBranch, {
+    const pipelines = await listPipelinesForRef(apiBase, token, project, productionBranch, {
       perPage: 1,
     });
     if (pipelines.length) lastPipelineBeforeMerge = Number(pipelines[0].id);
 
     log("Ожидание pipeline promote MR…");
+    await ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
+      dryRun,
+      log,
+      signal,
+    });
     await waitPipelineLoop(
-      () => listMrPipelines(apiBase, token, ref.project, Number(promoteMr.iid)),
+      () => listMrPipelines(apiBase, token, project, Number(promoteMr.iid)),
       {
         timeoutSec: pipelineTimeout,
         pollSec,
         log,
+        heartbeat,
         label: `MR pipeline !${promoteMr.iid}`,
         signal,
+        onNoPipeline: () =>
+          ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
+            dryRun,
+            log,
+            signal,
+          }),
       }
     );
   }
 
-  promoteMr = await mergeIfNeeded(apiBase, token, ref.project, promoteMr, {
+  promoteMr = await mergeIfNeeded(apiBase, token, project, promoteMr, {
     dryRun,
     label: "Promote",
     waitPipelineBefore: false,
     pipelineTimeout,
     pollSec,
     log,
+    heartbeat,
     signal,
+    hooks,
   });
 
   if (!dryRun) {
     checkAborted(signal);
-    promoteMr = await getMergeRequest(apiBase, token, ref.project, Number(promoteMr.iid));
+    promoteMr = await getMergeRequest(apiBase, token, project, Number(promoteMr.iid));
   }
 
   let buildImage;
@@ -561,15 +884,15 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     const productionPipelineId = await waitBranchPipeline(
       apiBase,
       token,
-      ref.project,
+      project,
       productionBranch,
       lastPipelineBeforeMerge,
-      { timeoutSec: pipelineTimeout, pollSec, log, signal }
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun }
     );
     buildImage = await extractBuildImage(
       apiBase,
       token,
-      ref.project,
+      project,
       productionPipelineId,
       buildStage,
       log,
@@ -598,7 +921,7 @@ async function mergeIfNeeded(
   token,
   project,
   mr,
-  { dryRun, label, waitPipelineBefore, pipelineTimeout, pollSec, log, signal }
+  { dryRun, label, waitPipelineBefore, pipelineTimeout, pollSec, log, heartbeat, signal, hooks }
 ) {
   const iid = Number(mr.iid);
   if (String(mr.state) === "merged") {
@@ -606,19 +929,26 @@ async function mergeIfNeeded(
     return mr;
   }
 
-  ensureMergeable(mr, label);
+  if (!dryRun) {
+    mr = await refreshMergeRequest(apiBase, token, project, iid, signal);
+  }
+  ensureMergeable(mr, label, hooks);
 
   if (waitPipelineBefore) {
     log(`${label}: ожидание pipeline перед merge (!${iid})…`);
     if (!dryRun) {
+      await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
       await waitPipelineLoop(
         () => listMrPipelines(apiBase, token, project, iid),
         {
           timeoutSec: pipelineTimeout,
           pollSec,
           log,
+          heartbeat,
           label: `MR pipeline !${iid}`,
           signal,
+          onNoPipeline: () =>
+            ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal }),
         }
       );
     }
@@ -650,6 +980,9 @@ async function getOrCreatePromoteMr(
     log(
       `Promote MR уже открыт: !${mr.iid} (${developBranch} → ${productionBranch})`
     );
+    if (!dryRun) {
+      await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
+    }
     return mr;
   }
 
@@ -666,9 +999,11 @@ async function getOrCreatePromoteMr(
   }
 
   checkAborted(signal);
-  return createMergeRequest(apiBase, token, project, {
+  const mr = await createMergeRequest(apiBase, token, project, {
     sourceBranch: developBranch,
     targetBranch: productionBranch,
     title,
   });
+  await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
+  return mr;
 }
