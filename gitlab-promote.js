@@ -33,6 +33,43 @@ const PIPELINE_ACTIVE = new Set([
   "canceling",
 ]);
 
+/**
+ * @param {unknown} err
+ */
+function formatError(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * @param {Record<string, unknown>[]} pipelines
+ */
+function hasActivePipeline(pipelines) {
+  return pipelines.some((p) => PIPELINE_ACTIVE.has(String(p.status)));
+}
+
+/**
+ * Выбирает pipeline для ожидания: success > active > newest terminal.
+ * Новый skipped не перебивает более старый running/success.
+ * @param {Record<string, unknown>[]} pipelines newest first
+ */
+function selectPipelineForWait(pipelines) {
+  const successes = pipelines.filter((p) => String(p.status) === "success");
+  if (successes.length) {
+    return successes.reduce((a, b) => (Number(a.id) > Number(b.id) ? a : b));
+  }
+  const actives = pipelines.filter((p) => PIPELINE_ACTIVE.has(String(p.status)));
+  if (actives.length) {
+    return actives.reduce((a, b) => (Number(a.id) > Number(b.id) ? a : b));
+  }
+  const hardFails = pipelines.filter((p) =>
+    ["failed", "canceled"].includes(String(p.status))
+  );
+  if (hardFails.length) {
+    return hardFails.reduce((a, b) => (Number(a.id) > Number(b.id) ? a : b));
+  }
+  return pipelines[0];
+}
+
 const MR_URL_RE =
   /(?:https?:\/\/)?[^/]+\/(?<project>.+?)\/-\/merge_requests\/(?<iid>\d+)/i;
 const MR_REF_RE = /^(?<project>.+?)!(?<iid>\d+)$/;
@@ -298,17 +335,34 @@ async function ensureMrPipelineStarted(
   if (dryRun) return;
 
   const iid = Number(mr.iid);
+  const sourceBranch = String(mr.source_branch || "");
   checkAborted(signal);
   const pipelines = await listMrPipelines(apiBase, token, project, iid);
-  if (pipelines.some((p) => PIPELINE_ACTIVE.has(String(p.status)))) return;
+  if (hasActivePipeline(pipelines)) return;
+
+  if (sourceBranch) {
+    checkAborted(signal);
+    const branchPipelines = await listPipelinesForRef(apiBase, token, project, sourceBranch, {
+      perPage: 10,
+    });
+    if (hasActivePipeline(branchPipelines)) return;
+  }
 
   log(`MR !${iid}: pipeline не запущен, запуск…`);
   try {
     const created = await createMrPipeline(apiBase, token, project, iid);
     log(`  создан MR pipeline #${created.id}`);
   } catch (firstErr) {
-    const sourceBranch = String(mr.source_branch || "");
     if (!sourceBranch) throw firstErr;
+    log(`  MR pipeline API: ${formatError(firstErr)}`);
+    checkAborted(signal);
+    const branchPipelines = await listPipelinesForRef(apiBase, token, project, sourceBranch, {
+      perPage: 10,
+    });
+    if (hasActivePipeline(branchPipelines)) {
+      log(`  на ветке ${JSON.stringify(sourceBranch)} уже есть активный pipeline`);
+      return;
+    }
     log(`  запуск pipeline на ветке ${JSON.stringify(sourceBranch)}…`);
     const created = await createRefPipeline(apiBase, token, project, sourceBranch);
     log(`  создан branch pipeline #${created.id}`);
@@ -376,8 +430,12 @@ async function waitPipelineLoop(
       continue;
     }
     const latest = pipelines[0];
-    const pid = Number(latest.id);
-    const status = String(latest.status);
+    const candidate = selectPipelineForWait(pipelines);
+    const pid = Number(candidate.id);
+    const status = String(candidate.status);
+    if (Number(latest.id) !== pid && String(latest.status) === "skipped") {
+      log(`  ${label}: игнорируем #${latest.id} (skipped), ждём #${pid} (${status})`);
+    }
     if (pid !== seen) {
       seen = pid;
       waitStartedAt = Date.now();
