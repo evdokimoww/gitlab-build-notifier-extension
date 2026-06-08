@@ -205,37 +205,86 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 10px;
-        border: 1px solid #ccc;
-        border-radius: 999px;
-        background: #fff;
+        padding: 6px 11px;
+        border: 2px solid transparent;
+        border-radius: 8px;
+        background: #f0f0f0;
         font-size: 12px;
         max-width: 100%;
+        opacity: 0.78;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease,
+          box-shadow 0.15s ease,
+          opacity 0.15s ease;
+      }
+      .session-tab:hover:not(.session-tab--active) {
+        opacity: 0.95;
+        background: #e8e8e8;
       }
       .session-tab--active {
+        opacity: 1;
+        background: #dceeff;
         border-color: #1068bf;
-        box-shadow: 0 0 0 1px #1068bf;
+        box-shadow:
+          0 0 0 1px #1068bf,
+          0 3px 10px rgba(16, 104, 191, 0.28);
+        transform: translateY(-1px);
       }
-      .session-tab--running {
+      .session-tab--active.session-tab--running {
+        background: #dceeff;
         border-color: #1068bf;
       }
-      .session-tab--success {
+      .session-tab--active.session-tab--success {
+        background: #d8f0e3;
         border-color: #0d8050;
+        box-shadow:
+          0 0 0 1px #0d8050,
+          0 3px 10px rgba(13, 128, 80, 0.25);
       }
-      .session-tab--error,
-      .session-tab--stale {
+      .session-tab--active.session-tab--error,
+      .session-tab--active.session-tab--stale {
+        background: #fde8ea;
         border-color: #b00020;
+        box-shadow:
+          0 0 0 1px #b00020,
+          0 3px 10px rgba(176, 0, 32, 0.22);
       }
-      .session-tab--cancelled {
+      .session-tab--active.session-tab--cancelled {
+        background: #fff3d6;
         border-color: #9a6700;
+        box-shadow:
+          0 0 0 1px #9a6700,
+          0 3px 10px rgba(154, 103, 0, 0.22);
+      }
+      .session-tab--running:not(.session-tab--active) {
+        border-color: #9ec5e8;
+      }
+      .session-tab--success:not(.session-tab--active) {
+        border-color: #9fd4b8;
+      }
+      .session-tab--error:not(.session-tab--active),
+      .session-tab--stale:not(.session-tab--active) {
+        border-color: #e8a0a8;
+      }
+      .session-tab--cancelled:not(.session-tab--active) {
+        border-color: #e0c878;
       }
       .session-tab-label {
         font-weight: 600;
         font-family: ui-monospace, monospace;
       }
+      .session-tab--active .session-tab-label {
+        font-weight: 800;
+      }
       .session-tab-badge {
         color: #666;
         font-size: 11px;
+      }
+      .session-tab--active .session-tab-badge {
+        color: #333;
+        font-weight: 600;
       }
       .session-tab-close {
         margin-left: 2px;
@@ -254,10 +303,39 @@
         }
         .session-tab {
           background: #2a2a2a;
-          border-color: #555;
+          border-color: transparent;
+        }
+        .session-tab:hover:not(.session-tab--active) {
+          background: #353535;
+        }
+        .session-tab--active {
+          background: #1a3a5c;
+          border-color: #4da3ff;
+          box-shadow:
+            0 0 0 1px #4da3ff,
+            0 3px 12px rgba(77, 163, 255, 0.35);
+        }
+        .session-tab--active.session-tab--success {
+          background: #1a3d2e;
+          border-color: #3ecf8e;
+          box-shadow:
+            0 0 0 1px #3ecf8e,
+            0 3px 12px rgba(62, 207, 142, 0.3);
+        }
+        .session-tab--active.session-tab--error,
+        .session-tab--active.session-tab--stale {
+          background: #3d1a1f;
+          border-color: #ff6b7a;
+        }
+        .session-tab--active.session-tab--cancelled {
+          background: #3d341a;
+          border-color: #e6b422;
         }
         .session-tab-badge {
           color: #aaa;
+        }
+        .session-tab--active .session-tab-badge {
+          color: #eee;
         }
       }
     </style>

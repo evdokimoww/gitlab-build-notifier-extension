@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GitLab build stage notifier",
-  "version": "1.4.1",
+  "version": "1.4.3",
   "description": "Уведомления о stage в GitLab и promote MR (feature → develop → master/main)",
   "icons": {
     "16": "icons/extension-16.png",

@@ -117,9 +117,9 @@ function applySession(session) {
 
 /**
  * @param {import("./promote-runner.js").PromoteSession[]} sessions
- * @param {string | null} activeId
+ * @param {string | null} highlightedId
  */
-function renderSessionTabs(sessions, activeId) {
+function renderSessionTabs(sessions, highlightedId) {
   const bar = $("sessionBar");
   bar.replaceChildren();
 
@@ -129,13 +129,12 @@ function renderSessionTabs(sessions, activeId) {
   }
 
   bar.hidden = false;
-  activeSessionId = activeId;
 
   for (const session of sessions) {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = `session-tab session-tab--${session.status}`;
-    if (session.id === activeId) tab.classList.add("session-tab--active");
+    if (session.id === highlightedId) tab.classList.add("session-tab--active");
     tab.title = `${session.mrArg} — ${statusTitle(session)}`;
     tab.dataset.sessionId = session.id;
 
@@ -175,35 +174,61 @@ async function fetchSessions() {
   return res;
 }
 
-function applyInitialSessionView(sessions, activeId) {
-  const running = (sessions || []).filter((s) => s.status === "running");
-  const active = running.find((s) => s.id === activeId) || running[0] || null;
+/**
+ * @param {import("./promote-runner.js").PromoteSession | null | undefined} session
+ * @param {import("./promote-runner.js").PromoteSession[]} sessions
+ */
+function viewSession(session, sessions) {
+  if (!session) {
+    activeSessionId = null;
+    renderSessionTabs(sessions, null);
+    clearDetailView();
+    return;
+  }
+  activeSessionId = session.id;
+  renderSessionTabs(sessions, session.id);
+  applySession(session);
+}
 
-  if (active) {
-    activeSessionId = active.id;
-    renderSessionTabs(sessions, active.id);
-    applySession(active);
+async function applyInitialSessionView(sessions, activeId) {
+  const list = sessions || [];
+  if (!list.length) {
+    viewSession(null, []);
     return;
   }
 
-  activeSessionId = null;
-  renderSessionTabs(sessions, null);
-  clearDetailView();
+  let picked = list.find((s) => s.id === activeId);
+  if (!picked) {
+    picked = list.find((s) => s.status === "running") || list[0];
+    try {
+      await chrome.runtime.sendMessage({
+        type: "promote-set-active",
+        sessionId: picked.id,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+  viewSession(picked, list);
 }
 
 async function syncSessionsFromBackground() {
   const res = await fetchSessions();
-  applyInitialSessionView(res.sessions || [], res.activeId);
+  await applyInitialSessionView(res.sessions || [], res.activeId);
   return res;
 }
 
 async function selectSession(sessionId) {
-  const res = await chrome.runtime.sendMessage({
+  const setRes = await chrome.runtime.sendMessage({
     type: "promote-set-active",
     sessionId,
   });
-  if (!res?.ok) throw new Error(res?.error || "Не удалось переключить сессию");
-  await syncSessionsFromBackground();
+  if (!setRes?.ok) throw new Error(setRes?.error || "Не удалось переключить сессию");
+
+  const res = await fetchSessions();
+  const session = (res.sessions || []).find((s) => s.id === sessionId);
+  if (!session) throw new Error("Сессия не найдена");
+  viewSession(session, res.sessions || []);
 }
 
 async function dismissSession(sessionId) {
@@ -212,11 +237,20 @@ async function dismissSession(sessionId) {
     sessionId,
   });
   if (!res?.ok) throw new Error(res?.error || "Не удалось закрыть сессию");
-  await syncSessionsFromBackground();
+
+  const list = await fetchSessions();
+  const viewed = activeSessionId
+    ? (list.sessions || []).find((s) => s.id === activeSessionId)
+    : null;
+  if (viewed) viewSession(viewed, list.sessions || []);
+  else await applyInitialSessionView(list.sessions || [], list.activeId);
+
   await restoreReadyStatus();
 }
 
 async function restoreReadyStatus() {
+  if (activeSessionId) return;
+
   const res = await fetchSessions().catch(() => null);
   const active = res?.sessions?.find((s) => s.id === res.activeId);
   if (active?.status === "running") return;
@@ -355,15 +389,12 @@ function bindStorageSync() {
 
     if (activeSessionId) {
       const viewed = sessions.find((s) => s.id === activeSessionId);
-      renderSessionTabs(sessions, activeSessionId);
-      applySession(viewed || null);
-      if (!viewed) activeSessionId = null;
+      viewSession(viewed || null, sessions);
       return;
     }
 
-    const running = sessions.filter((s) => s.status === "running");
-    if (running.length) {
-      applyInitialSessionView(sessions, state.activeId);
+    if (sessions.length) {
+      void applyInitialSessionView(sessions, state.activeId);
       return;
     }
 
@@ -447,8 +478,11 @@ function bindUi() {
       $("mrBatch").value = "";
       await chrome.storage.local.set({ [STORAGE_KEYS.mrArg]: "", [STORAGE_KEYS.mrBatch]: "" });
 
-      await syncSessionsFromBackground();
-      if (res.sessionId) await selectSession(res.sessionId);
+      if (res.sessionId) {
+        await selectSession(res.sessionId);
+      } else {
+        await syncSessionsFromBackground();
+      }
       $("mrArg").focus();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e), "err");
