@@ -41,10 +41,61 @@ function formatError(err) {
 }
 
 /**
+ * GitLab 400 when CI rules yield no jobs for the merge request pipeline.
+ * @param {string} msg
+ */
+function isEmptyPipelineError(msg) {
+  if (!msg.includes("400")) return false;
+  return /would have been empty|resulting pipeline.*empty|rules configuration for the relevant jobs/i.test(
+    msg
+  );
+}
+
+/**
+ * @param {Record<string, unknown>[]} pipelines
+ */
+function hasSuccessOrActivePipeline(pipelines) {
+  return pipelines.some((p) => {
+    const s = String(p.status);
+    return s === "success" || PIPELINE_ACTIVE.has(s);
+  });
+}
+
+/**
  * @param {Record<string, unknown>[]} pipelines
  */
 function hasActivePipeline(pipelines) {
   return pipelines.some((p) => PIPELINE_ACTIVE.has(String(p.status)));
+}
+
+/**
+ * @param {Record<string, unknown>[]} pipelines
+ * @param {number | null | undefined} afterPipelineId
+ */
+function hasRelevantActivePipeline(pipelines, afterPipelineId) {
+  return pipelines.some((p) => {
+    const pid = Number(p.id);
+    if (afterPipelineId != null && pid <= afterPipelineId) return false;
+    return PIPELINE_ACTIVE.has(String(p.status));
+  });
+}
+
+/**
+ * @param {Record<string, unknown>[]} pipelines
+ * @param {number | null | undefined} afterPipelineId
+ */
+function pipelinesAfter(pipelines, afterPipelineId) {
+  if (afterPipelineId == null) return pipelines;
+  return pipelines.filter((p) => Number(p.id) > afterPipelineId);
+}
+
+/**
+ * @param {Record<string, unknown>[]} pipelines
+ * @returns {number | null}
+ */
+function maxPipelineId(pipelines) {
+  if (!pipelines.length) return null;
+  return pipelines.reduce((max, p) => Math.max(max, Number(p.id)), 0);
 }
 
 /**
@@ -73,7 +124,7 @@ function selectPipelineForWait(pipelines) {
 const MR_URL_RE =
   /(?:https?:\/\/)?[^/]+\/(?<project>.+?)\/-\/merge_requests\/(?<iid>\d+)/i;
 const MR_REF_RE = /^(?<project>.+?)!(?<iid>\d+)$/;
-const UNTAGGED_IMAGE_RE = /^Untagged:\s*(.+?)\s*$/gm;
+const UNTAGGED_IMAGE_RE = /Untagged:\s*(\S+)/g;
 const IMAGE_LINE_RE = /^[^\s:]+:[^\s:]+$/;
 const PRODUCTION_SUFFIXES = ["master", "main"];
 
@@ -324,50 +375,103 @@ export async function resolveProductionBranch(
  */
 /**
  * @param {Record<string, unknown>} mr
+ * @param {{ mrApiUnsupported?: boolean }} pipelineCtx
+ */
+async function waitForMrAutoPipeline(
+  apiBase,
+  token,
+  project,
+  mr,
+  { log, signal, pipelineCtx }
+) {
+  const iid = Number(mr.iid);
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    checkAborted(signal);
+    const pipelines = await listMrPipelines(apiBase, token, project, iid);
+    if (hasActivePipeline(pipelines)) {
+      const active = pipelines.find((p) => PIPELINE_ACTIVE.has(String(p.status)));
+      log(`  GitLab запустил MR pipeline #${active?.id ?? pipelines[0].id}`);
+      return;
+    }
+    await sleep(3000, signal);
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} mr
+ * @param {{ mrApiUnsupported?: boolean, emptyPipelineOk?: boolean, mrPipelineEmpty?: boolean }} [pipelineCtx]
+ * @returns {Promise<number | null>} id созданного pipeline или null
  */
 async function ensureMrPipelineStarted(
   apiBase,
   token,
   project,
   mr,
-  { dryRun, log, signal }
+  { dryRun, log, signal, afterPipelineId = null, pipelineCtx = null }
 ) {
-  if (dryRun) return;
+  if (dryRun) return null;
+
+  if (pipelineCtx?.mrPipelineEmpty) return null;
 
   const iid = Number(mr.iid);
   const sourceBranch = String(mr.source_branch || "");
   checkAborted(signal);
   const pipelines = await listMrPipelines(apiBase, token, project, iid);
-  if (hasActivePipeline(pipelines)) return;
+  if (hasRelevantActivePipeline(pipelines, afterPipelineId)) return null;
 
   if (sourceBranch) {
     checkAborted(signal);
     const branchPipelines = await listPipelinesForRef(apiBase, token, project, sourceBranch, {
       perPage: 10,
     });
-    if (hasActivePipeline(branchPipelines)) return;
+    if (hasRelevantActivePipeline(branchPipelines, afterPipelineId)) return null;
   }
 
   log(`MR !${iid}: pipeline не запущен, запуск…`);
-  try {
-    const created = await createMrPipeline(apiBase, token, project, iid);
-    log(`  создан MR pipeline #${created.id}`);
-  } catch (firstErr) {
-    if (!sourceBranch) throw firstErr;
-    log(`  MR pipeline API: ${formatError(firstErr)}`);
-    checkAborted(signal);
-    const branchPipelines = await listPipelinesForRef(apiBase, token, project, sourceBranch, {
-      perPage: 10,
-    });
-    if (hasActivePipeline(branchPipelines)) {
-      log(`  на ветке ${JSON.stringify(sourceBranch)} уже есть активный pipeline`);
-      return;
+  let createdId = null;
+
+  const skipMrApi = pipelineCtx?.mrApiUnsupported;
+  if (!skipMrApi) {
+    try {
+      const created = await createMrPipeline(apiBase, token, project, iid);
+      createdId = Number(created.id);
+      log(`  создан MR pipeline #${createdId}`);
+      await sleep(3000, signal);
+      return createdId;
+    } catch (firstErr) {
+      const msg = formatError(firstErr);
+      if (isEmptyPipelineError(msg)) {
+        if (pipelineCtx?.emptyPipelineOk) {
+          pipelineCtx.mrPipelineEmpty = true;
+          log("  CI не требует pipeline для MR (пустой pipeline по rules)");
+          return null;
+        }
+      } else if (msg.includes("405")) {
+        if (pipelineCtx) pipelineCtx.mrApiUnsupported = true;
+        log(`  MR pipeline API не поддерживается (405), запуск на ветке…`);
+      } else {
+        log(`  MR pipeline API: ${msg}`);
+      }
+      if (!sourceBranch) throw firstErr;
     }
-    log(`  запуск pipeline на ветке ${JSON.stringify(sourceBranch)}…`);
-    const created = await createRefPipeline(apiBase, token, project, sourceBranch);
-    log(`  создан branch pipeline #${created.id}`);
   }
+
+  checkAborted(signal);
+  const branchPipelines = sourceBranch
+    ? await listPipelinesForRef(apiBase, token, project, sourceBranch, { perPage: 10 })
+    : [];
+  if (hasRelevantActivePipeline(branchPipelines, afterPipelineId)) {
+    log(`  на ветке ${JSON.stringify(sourceBranch)} уже есть активный pipeline`);
+    return null;
+  }
+
+  log(`  запуск pipeline на ветке ${JSON.stringify(sourceBranch)}…`);
+  const created = await createRefPipeline(apiBase, token, project, sourceBranch);
+  createdId = Number(created.id);
+  log(`  создан branch pipeline #${createdId}`);
   await sleep(3000, signal);
+  return createdId;
 }
 
 /**
@@ -386,15 +490,10 @@ async function ensureBranchPipelineStarted(
   checkAborted(signal);
   const pipelines = await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 });
 
-  const hasRelevantActive = pipelines.some((p) => {
-    const pid = Number(p.id);
-    if (afterPipelineId != null && pid <= afterPipelineId) return false;
-    return PIPELINE_ACTIVE.has(String(p.status));
-  });
-  if (hasRelevantActive) return;
+  if (hasRelevantActivePipeline(pipelines, afterPipelineId)) return;
 
-  const hasNewer = pipelines.some((p) => afterPipelineId == null || Number(p.id) > afterPipelineId);
-  if (hasNewer) return;
+  const newer = pipelinesAfter(pipelines, afterPipelineId);
+  if (newer.length) return;
 
   log(`Ветка ${JSON.stringify(ref)}: pipeline не запущен, запуск…`);
   const created = await createRefPipeline(apiBase, token, project, ref);
@@ -404,7 +503,18 @@ async function ensureBranchPipelineStarted(
 
 async function waitPipelineLoop(
   fetchPipelines,
-  { timeoutSec, pollSec, log, label, signal, onNoPipeline, heartbeat }
+  {
+    timeoutSec,
+    pollSec,
+    log,
+    label,
+    signal,
+    onNoPipeline,
+    heartbeat,
+    afterPipelineId = null,
+    emptyPipelineOk = false,
+    pipelineCtx = null,
+  }
 ) {
   const ctx = { log, heartbeat };
   const terminalOk = new Set(["success"]);
@@ -412,6 +522,7 @@ async function waitPipelineLoop(
   const deadline = Date.now() + timeoutSec * 1000;
   let seen = null;
   let triedStart = false;
+  let skippedRetried = false;
   let waitStartedAt = Date.now();
   let lastProgressLogAt = 0;
 
@@ -419,7 +530,8 @@ async function waitPipelineLoop(
     checkAborted(signal);
     pulseWait(ctx);
     const pipelines = await fetchPipelines();
-    if (!pipelines.length) {
+    const relevant = pipelinesAfter(pipelines, afterPipelineId);
+    if (!relevant.length) {
       if (!triedStart && onNoPipeline) {
         triedStart = true;
         await onNoPipeline();
@@ -429,8 +541,8 @@ async function waitPipelineLoop(
       await sleep(pollSec * 1000, signal);
       continue;
     }
-    const latest = pipelines[0];
-    const candidate = selectPipelineForWait(pipelines);
+    const latest = relevant[0];
+    const candidate = selectPipelineForWait(relevant);
     const pid = Number(candidate.id);
     const status = String(candidate.status);
     if (Number(latest.id) !== pid && String(latest.status) === "skipped") {
@@ -452,6 +564,28 @@ async function waitPipelineLoop(
     }
     if (terminalOk.has(status)) return pid;
     if (terminalBad.has(status)) {
+      if (
+        status === "skipped" &&
+        emptyPipelineOk &&
+        !hasSuccessOrActivePipeline(relevant)
+      ) {
+        log(`  ${label}: pipeline skipped (нет jobs по CI rules), продолжаем…`);
+        return null;
+      }
+      const allSkipped =
+        status === "skipped" &&
+        relevant.every((p) => String(p.status) === "skipped");
+      if (allSkipped && !skippedRetried && onNoPipeline) {
+        skippedRetried = true;
+        log(`  ${label}: все новые pipeline skipped, повторный запуск…`);
+        await onNoPipeline();
+        if (pipelineCtx?.mrPipelineEmpty) {
+          log(`  ${label}: CI не требует pipeline, продолжаем…`);
+          return null;
+        }
+        seen = null;
+        continue;
+      }
       throw new Error(`${label} #${pid} завершился со статусом: ${status}`);
     }
     await sleep(pollSec * 1000, signal);
@@ -475,95 +609,40 @@ async function waitBranchPipeline(
   afterPipelineId,
   { timeoutSec, pollSec, log, signal, dryRun, heartbeat }
 ) {
-  const ctx = { log, heartbeat };
-  if (!dryRun) {
-    await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
-      dryRun,
+  const label = `branch pipeline ${ref}`;
+  const ensurePipeline = dryRun
+    ? undefined
+    : () =>
+        ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
+          dryRun,
+          log,
+          signal,
+        });
+
+  if (ensurePipeline) {
+    await ensurePipeline();
+  }
+
+  const pipelineId = await waitPipelineLoop(
+    () => listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 }),
+    {
+      timeoutSec,
+      pollSec,
       log,
+      label,
       signal,
-    });
-  }
-
-  const deadline = Date.now() + timeoutSec * 1000;
-  let triedStart = false;
-  let seenKey = "";
-  let waitStartedAt = Date.now();
-  let lastProgressLogAt = 0;
-
-  while (Date.now() < deadline) {
-    checkAborted(signal);
-    pulseWait(ctx);
-    const pipelines = await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 });
-    if (!pipelines.length) {
-      if (!triedStart && !dryRun) {
-        triedStart = true;
-        await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
-          dryRun,
-          log,
-          signal,
-        });
-        continue;
-      }
-      log(`  branch pipeline: ожидание pipeline на ${JSON.stringify(ref)}…`);
-      await sleep(pollSec * 1000, signal);
-      continue;
+      heartbeat,
+      afterPipelineId,
+      onNoPipeline: ensurePipeline,
     }
-
-    let candidate = null;
-    for (const pipeline of pipelines) {
-      const pid = Number(pipeline.id);
-      if (afterPipelineId != null && pid <= afterPipelineId) continue;
-      candidate = pipeline;
-      break;
-    }
-
-    if (!candidate) {
-      if (!triedStart && !dryRun) {
-        triedStart = true;
-        await ensureBranchPipelineStarted(apiBase, token, project, ref, afterPipelineId, {
-          dryRun,
-          log,
-          signal,
-        });
-        continue;
-      }
-      log(
-        `  branch pipeline: ожидание нового pipeline на ${JSON.stringify(ref)} ` +
-          `(после #${afterPipelineId})…`
-      );
-      await sleep(pollSec * 1000, signal);
-      continue;
-    }
-
-    const pid = Number(candidate.id);
-    const status = String(candidate.status);
-    const key = `${pid}:${status}`;
-    if (key !== seenKey) {
-      seenKey = key;
-      waitStartedAt = Date.now();
-      lastProgressLogAt = waitStartedAt;
-      log(`  branch pipeline #${pid} на ${ref}: ${status}`);
-    } else {
-      lastProgressLogAt = maybeLogWaitProgress(ctx, {
-        label: `branch pipeline ${ref}`,
-        pid,
-        status,
-        waitStartedAt,
-        lastProgressLogAt,
-      });
-    }
-
-    if (status === "success") return pid;
-    if (["failed", "canceled", "skipped"].includes(status)) {
-      throw new Error(`Branch pipeline #${pid} на ${ref} завершился: ${status}`);
-    }
-
-    await sleep(pollSec * 1000, signal);
-  }
-
-  throw new Error(
-    `Pipeline на ${JSON.stringify(ref)} не успел за ${timeoutSec} с (после #${afterPipelineId})`
   );
+
+  if (pipelineId == null) {
+    throw new Error(
+      `Build pipeline на ${JSON.stringify(ref)} не найден (все pipeline skipped, CI rules)`
+    );
+  }
+  return pipelineId;
 }
 
 /**
@@ -606,10 +685,18 @@ function parseImageFromArtifacts(content) {
 }
 
 /**
+ * GitLab runner prefixes trace lines with ANSI codes and uses \r for progress updates.
+ * @param {string} trace
+ */
+function normalizeJobTrace(trace) {
+  return trace.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\r/g, "\n");
+}
+
+/**
  * @param {string} trace
  */
 function parseImageFromTrace(trace) {
-  const matches = [...trace.matchAll(UNTAGGED_IMAGE_RE)];
+  const matches = [...normalizeJobTrace(trace).matchAll(UNTAGGED_IMAGE_RE)];
   if (matches.length) return matches[matches.length - 1][1].trim();
   return null;
 }
@@ -867,12 +954,14 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     return {};
   }
 
+  const pipelineCtx = { mrApiUnsupported: false, emptyPipelineOk: true };
   let promoteMr = await getOrCreatePromoteMr(apiBase, token, project, {
     developBranch,
     productionBranch,
     dryRun,
     log,
     signal,
+    pipelineCtx,
   });
 
   if (!dryRun) {
@@ -894,29 +983,43 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     });
     if (pipelines.length) lastPipelineBeforeMerge = Number(pipelines[0].id);
 
-    log("Ожидание pipeline promote MR…");
-    await ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
-      dryRun,
-      log,
-      signal,
-    });
-    await waitPipelineLoop(
-      () => listMrPipelines(apiBase, token, project, Number(promoteMr.iid)),
-      {
-        timeoutSec: pipelineTimeout,
-        pollSec,
-        log,
-        heartbeat,
-        label: `MR pipeline !${promoteMr.iid}`,
-        signal,
-        onNoPipeline: () =>
-          ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
-            dryRun,
-            log,
-            signal,
-          }),
-      }
+    const promotePipelinesBefore = await listMrPipelines(
+      apiBase,
+      token,
+      project,
+      Number(promoteMr.iid)
     );
+    const promotePipelineBaseline = maxPipelineId(promotePipelinesBefore);
+    const ensurePromotePipeline = () =>
+      ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
+        dryRun,
+        log,
+        signal,
+        afterPipelineId: promotePipelineBaseline,
+        pipelineCtx,
+      });
+
+    log("Ожидание pipeline promote MR…");
+    await ensurePromotePipeline();
+    if (pipelineCtx.mrPipelineEmpty) {
+      log("  CI не требует pipeline для promote MR, продолжаем…");
+    } else {
+      await waitPipelineLoop(
+        () => listMrPipelines(apiBase, token, project, Number(promoteMr.iid)),
+        {
+          timeoutSec: pipelineTimeout,
+          pollSec,
+          log,
+          heartbeat,
+          label: `MR pipeline !${promoteMr.iid}`,
+          signal,
+          afterPipelineId: promotePipelineBaseline,
+          onNoPipeline: ensurePromotePipeline,
+          emptyPipelineOk: true,
+          pipelineCtx,
+        }
+      );
+    }
   }
 
   promoteMr = await mergeIfNeeded(apiBase, token, project, promoteMr, {
@@ -995,20 +1098,28 @@ async function mergeIfNeeded(
   if (waitPipelineBefore) {
     log(`${label}: ожидание pipeline перед merge (!${iid})…`);
     if (!dryRun) {
-      await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
-      await waitPipelineLoop(
-        () => listMrPipelines(apiBase, token, project, iid),
-        {
-          timeoutSec: pipelineTimeout,
-          pollSec,
+      const pipelineCtx = { mrApiUnsupported: false };
+      const pipelinesBefore = await listMrPipelines(apiBase, token, project, iid);
+      const pipelineBaseline = maxPipelineId(pipelinesBefore);
+      const ensurePipeline = () =>
+        ensureMrPipelineStarted(apiBase, token, project, mr, {
+          dryRun,
           log,
-          heartbeat,
-          label: `MR pipeline !${iid}`,
           signal,
-          onNoPipeline: () =>
-            ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal }),
-        }
-      );
+          afterPipelineId: pipelineBaseline,
+          pipelineCtx,
+        });
+      await ensurePipeline();
+      await waitPipelineLoop(() => listMrPipelines(apiBase, token, project, iid), {
+        timeoutSec: pipelineTimeout,
+        pollSec,
+        log,
+        heartbeat,
+        label: `MR pipeline !${iid}`,
+        signal,
+        afterPipelineId: pipelineBaseline,
+        onNoPipeline: ensurePipeline,
+      });
     }
   }
 
@@ -1026,7 +1137,7 @@ async function getOrCreatePromoteMr(
   apiBase,
   token,
   project,
-  { developBranch, productionBranch, dryRun, log, signal }
+  { developBranch, productionBranch, dryRun, log, signal, pipelineCtx = null }
 ) {
   checkAborted(signal);
   const existing = await listOpenMergeRequests(apiBase, token, project, {
@@ -1038,9 +1149,6 @@ async function getOrCreatePromoteMr(
     log(
       `Promote MR уже открыт: !${mr.iid} (${developBranch} → ${productionBranch})`
     );
-    if (!dryRun) {
-      await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
-    }
     return mr;
   }
 
@@ -1062,6 +1170,10 @@ async function getOrCreatePromoteMr(
     targetBranch: productionBranch,
     title,
   });
-  await ensureMrPipelineStarted(apiBase, token, project, mr, { dryRun, log, signal });
+  await waitForMrAutoPipeline(apiBase, token, project, mr, {
+    log,
+    signal,
+    pipelineCtx: pipelineCtx || {},
+  });
   return mr;
 }
