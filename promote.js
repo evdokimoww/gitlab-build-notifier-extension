@@ -435,6 +435,24 @@ function bindUi() {
     setStatus("Отмена…", "warn");
   });
 
+  $("planCancel").addEventListener("click", () => {
+    closePlanDialog();
+    setStatus("Запуск отменён — цепочка не подтверждена.", "warn");
+  });
+
+  $("planConfirm").addEventListener("click", () => {
+    const form = pendingPlanForm;
+    closePlanDialog();
+    if (!form) return;
+    void startPromoteAfterConfirm(form);
+  });
+
+  $("planDialog").addEventListener("cancel", (e) => {
+    e.preventDefault();
+    closePlanDialog();
+    setStatus("Запуск отменён — цепочка не подтверждена.", "warn");
+  });
+
   $("run").addEventListener("click", async () => {
     const form = readForm();
     if (!form.mrArg && !form.mrBatch) {
@@ -442,7 +460,7 @@ function bindUi() {
       return;
     }
 
-    setStatus("Запуск…", undefined);
+    setStatus("Анализ цепочки merge…", undefined);
     await saveFormPrefs();
 
     const settings = await chrome.storage.local.get({
@@ -467,33 +485,254 @@ function bindUi() {
       return;
     }
 
+    $("run").disabled = true;
     try {
-      const res = await chrome.runtime.sendMessage({ type: "promote-start", form });
+      const res = await chrome.runtime.sendMessage({ type: "promote-plan", form });
       if (!res?.ok) {
-        setStatus(res?.error || "Не удалось запустить", "err");
+        setStatus(res?.error || "Не удалось проанализировать цепочку", "err");
         return;
       }
-
-      $("mrArg").value = "";
-      $("mrBatch").value = "";
-      await chrome.storage.local.set({ [STORAGE_KEYS.mrArg]: "", [STORAGE_KEYS.mrBatch]: "" });
-
-      if (res.sessionId) {
-        await selectSession(res.sessionId);
-      } else {
-        await syncSessionsFromBackground();
-      }
-      $("mrArg").focus();
+      showPlanDialog(res.plan, form);
+      setStatus("Проверьте цепочку и подтвердите запуск.", "warn");
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e), "err");
+    } finally {
+      $("run").disabled = false;
     }
   });
+}
+
+/** @type {ReturnType<typeof readForm> | null} */
+let pendingPlanForm = null;
+
+/**
+ * @param {import("./gitlab-promote.js").PromotePlanStep} step
+ */
+function stepKindLabel(step) {
+  switch (step.kind) {
+    case "feature":
+      return "feature → develop";
+    case "promote-create":
+      return "promote MR";
+    case "promote":
+      return "develop → production";
+    case "build":
+      return "build";
+    default:
+      return step.kind;
+  }
+}
+
+/**
+ * @param {import("./gitlab-promote.js").PromotePlan} plan
+ * @param {ReturnType<typeof readForm>} form
+ */
+function showPlanDialog(plan, form) {
+  pendingPlanForm = form;
+  const meta = $("planMeta");
+  const prod = plan.productionBranch
+    ? ` · production: <code>${escapeHtml(plan.productionBranch)}</code>`
+    : "";
+  meta.innerHTML =
+    `Проект: <code>${escapeHtml(plan.project)}</code>` +
+    ` · develop: <code>${escapeHtml(plan.developBranch)}</code>${prod}`;
+
+  const flags = $("planFlags");
+  flags.replaceChildren();
+  /** @type {Array<[string, boolean]>} */
+  const flagList = [
+    ["dry run", plan.dryRun],
+    ["только feature → develop", plan.stopAfterFeature],
+    ["стоп после создания promote MR", plan.stopAfterPromoteMr],
+    ["без build-образа", plan.skipBuildImage],
+    ["ждать pipeline feature", plan.waitFeaturePipeline],
+  ];
+  let anyFlag = false;
+  for (const [label, on] of flagList) {
+    if (!on) continue;
+    anyFlag = true;
+    const span = document.createElement("span");
+    span.className = "plan-flag" + (label === "dry run" ? " plan-flag--warn" : "");
+    span.textContent = label;
+    flags.append(span);
+  }
+  flags.hidden = !anyFlag;
+
+  const list = $("planSteps");
+  list.replaceChildren();
+  for (const step of plan.steps) {
+    const li = document.createElement("li");
+
+    const kind = document.createElement("div");
+    kind.className = "step-kind";
+    kind.textContent = stepKindLabel(step);
+
+    const title = document.createElement("div");
+    title.className = "step-title";
+    title.textContent = step.label;
+
+    li.append(kind, title);
+
+    if (step.mrTitle) {
+      const mrTitle = document.createElement("div");
+      mrTitle.className = "step-mr-title";
+      mrTitle.textContent = step.mrTitle;
+      li.append(mrTitle);
+    }
+
+    if (step.sourceBranch || step.targetBranch) {
+      const flow = document.createElement("div");
+      flow.className = "step-flow";
+      if (step.kind === "build") {
+        flow.textContent = step.targetBranch || "";
+      } else {
+        const src = document.createElement("span");
+        src.textContent = step.sourceBranch || "?";
+        const arrow = document.createElement("span");
+        arrow.className = "arrow";
+        arrow.textContent = "→";
+        const dst = document.createElement("span");
+        dst.textContent = step.targetBranch || "?";
+        flow.append(src, arrow, dst);
+      }
+      li.append(flow);
+    }
+
+    if (step.note) {
+      const note = document.createElement("div");
+      note.className = "step-note";
+      note.textContent = step.note;
+      li.append(note);
+    }
+
+    list.append(li);
+  }
+
+  /** @type {HTMLDialogElement} */ ($("planDialog")).showModal();
+}
+
+function closePlanDialog() {
+  pendingPlanForm = null;
+  const dialog = /** @type {HTMLDialogElement} */ ($("planDialog"));
+  if (dialog.open) dialog.close();
+}
+
+/** @param {string} s */
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * @param {ReturnType<typeof readForm>} form
+ */
+async function startPromoteAfterConfirm(form) {
+  setStatus("Запуск…", undefined);
+  $("run").disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "promote-start", form });
+    if (!res?.ok) {
+      setStatus(res?.error || "Не удалось запустить", "err");
+      return;
+    }
+
+    $("mrArg").value = "";
+    $("mrBatch").value = "";
+    await chrome.storage.local.set({ [STORAGE_KEYS.mrArg]: "", [STORAGE_KEYS.mrBatch]: "" });
+
+    if (res.sessionId) {
+      await selectSession(res.sessionId);
+    } else {
+      await syncSessionsFromBackground();
+    }
+    $("mrArg").focus();
+  } catch (e) {
+    setStatus(e instanceof Error ? e.message : String(e), "err");
+  } finally {
+    $("run").disabled = false;
+  }
 }
 
 function init() {
   bindStorageSync();
   bindUi();
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== "PROMOTE_UI_FEEDBACK") return;
+    void applyPromotePageFeedback(Boolean(msg.ok));
+  });
   loadFormPrefs().catch((e) => setStatus(String(e), "err"));
+}
+
+/**
+ * Мигание favicon / префикс title на странице promote (как на вкладках GitLab).
+ * @param {boolean} ok
+ */
+async function applyPromotePageFeedback(ok) {
+  const prefix = ok ? "[CI OK]" : "[CI FAIL]";
+  const t = document.title.replace(/^\[(CI OK|CI FAIL|CI …)\]\s*/, "");
+  document.title = `${prefix} ${t}`;
+
+  const faviconPath = ok ? "icons/notify-ok.png" : "icons/notify-fail.png";
+  const strongUrl = chrome.runtime.getURL(faviconPath);
+  const size = 32;
+  const fid = "__gitlab_ci_notifier_favicon__";
+  const timerKey = "__gitlab_promote_favicon_iv__";
+
+  function fadedIconDataUrl(src, opacity) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const c = canvas.getContext("2d");
+        if (!c) {
+          reject(new Error("canvas unavailable"));
+          return;
+        }
+        c.clearRect(0, 0, size, size);
+        c.globalAlpha = opacity;
+        c.drawImage(img, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  try {
+    const softUrl = await fadedIconDataUrl(strongUrl, 0.28).catch(() => strongUrl);
+    let link = document.getElementById(fid);
+    if (!link) {
+      link = document.createElement("link");
+      link.id = fid;
+      link.rel = "icon";
+      link.type = "image/png";
+      document.head.appendChild(link);
+    }
+    const prevIv = window[timerKey];
+    if (typeof prevIv === "number") window.clearInterval(prevIv);
+
+    let blinkOn = true;
+    let ticks = 0;
+    function showFrame() {
+      link.href = blinkOn ? strongUrl : softUrl;
+      blinkOn = !blinkOn;
+      ticks += 1;
+      if (ticks >= 28) {
+        window.clearInterval(window[timerKey]);
+        window[timerKey] = 0;
+        link.href = strongUrl;
+      }
+    }
+    showFrame();
+    window[timerKey] = window.setInterval(showFrame, 450);
+  } catch (e) {
+    console.warn("[promote] favicon feedback:", e);
+  }
 }
 
 if (document.readyState === "loading") {

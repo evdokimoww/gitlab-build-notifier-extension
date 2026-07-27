@@ -2,7 +2,8 @@
  * Фоновый запуск promote: несколько параллельных сессий в chrome.storage.local.
  */
 
-import { MrMergeConflictError, runPromote } from "./gitlab-promote.js";
+import { MrMergeConflictError, parseMrArgList, planPromote, runPromote } from "./gitlab-promote.js";
+import { deliverCiNotification, findNotifyTabIds } from "./ci-notify.js";
 
 export const PROMOTE_SESSIONS_KEY = "promoteSessions";
 /** @deprecated миграция со старого формата */
@@ -240,6 +241,15 @@ export async function promoteKeepaliveTick() {
 /**
  * @param {import("./gitlab-promote.js").PromoteOptions} form
  * @param {{ gitlabBaseUrl: string, privateToken: string }} settings
+ * @returns {Promise<import("./gitlab-promote.js").PromotePlan>}
+ */
+export async function previewPromotePlan(form, settings) {
+  return planPromote(settings.gitlabBaseUrl, settings.privateToken, form);
+}
+
+/**
+ * @param {import("./gitlab-promote.js").PromoteOptions} form
+ * @param {{ gitlabBaseUrl: string, privateToken: string }} settings
  */
 export async function acceptPromoteStart(form, settings) {
   await reconcileStaleSessions();
@@ -274,17 +284,59 @@ export async function acceptPromoteStart(form, settings) {
  * @param {{ gitlabBaseUrl: string, privateToken: string }} settings
  * @param {AbortSignal} signal
  */
-async function notifyPromoteConflict(sessionId, mr, message) {
-  const iid = mr?.iid ?? "?";
-  const notifId = `promote-conflict-${sessionId}-${iid}`;
+async function loadPromoteNotifySettings() {
+  return chrome.storage.local.get({
+    enableOverlay: false,
+    enableFaviconTint: true,
+    enableNotificationSound: true,
+  });
+}
+
+/**
+ * @param {{
+ *   ok: boolean,
+ *   title: string,
+ *   message: string,
+ *   notifId: string,
+ *   gitlabBaseUrl: string,
+ *   projectPath?: string,
+ * }} opts
+ */
+async function deliverPromoteOutcome(opts) {
+  const notifySettings = await loadPromoteNotifySettings();
+  const tabIds = await findNotifyTabIds(opts.gitlabBaseUrl, opts.projectPath);
+  await deliverCiNotification(tabIds, notifySettings, {
+    ok: opts.ok,
+    title: opts.title,
+    message: opts.message,
+    notifId: opts.notifId,
+  });
+  // executeScript на chrome-extension:// обычно недоступен — дергаем UI promote.html напрямую
+  chrome.runtime.sendMessage({ type: "PROMOTE_UI_FEEDBACK", ok: opts.ok }).catch(() => {});
+}
+
+/**
+ * @param {import("./gitlab-promote.js").PromoteOptions} form
+ * @returns {string}
+ */
+function projectPathFromForm(form) {
   try {
-    await chrome.notifications.clear(notifId).catch(() => {});
-    await chrome.notifications.create(notifId, {
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/notify-fail.png"),
-      title: `GitLab: конфликт MR !${iid}`,
+    return parseMrArgList(form.mrArg, form.mrBatch)[0]?.project || "";
+  } catch {
+    return "";
+  }
+}
+
+async function notifyPromoteConflict(sessionId, mr, message, settings, projectPath) {
+  const iid = mr?.iid ?? "?";
+  try {
+    await deliverPromoteOutcome({
+      ok: false,
+      title: `Promote: конфликт MR !${iid}`,
       message: String(message).slice(0, 240),
-      priority: 2,
+      notifId: `promote-conflict-${sessionId}-${iid}`,
+      gitlabBaseUrl: settings.gitlabBaseUrl,
+      projectPath,
     });
   } catch (e) {
     console.warn("[gitlab-notifier] promote conflict notification:", e);
@@ -292,13 +344,17 @@ async function notifyPromoteConflict(sessionId, mr, message) {
 }
 
 async function executePromoteRun(sessionId, form, settings, signal) {
+  const projectPath = projectPathFromForm(form);
+  const label = form.sessionLabel || form.mrArg || sessionId;
+
   try {
     const result = await runPromote(settings.gitlabBaseUrl, settings.privateToken, form, {
       signal,
       log: (line) => appendSessionLog(sessionId, line),
       heartbeat: () => patchSessionById(sessionId, {}),
       onBuildImage: (image) => patchSessionById(sessionId, { buildImage: image }),
-      onConflict: (mr, message) => notifyPromoteConflict(sessionId, mr, message),
+      onConflict: (mr, message) =>
+        notifyPromoteConflict(sessionId, mr, message, settings, projectPath),
     });
     if (result.buildImage) {
       await patchSessionById(sessionId, { buildImage: result.buildImage });
@@ -308,6 +364,18 @@ async function executePromoteRun(sessionId, form, settings, signal) {
       statusText: "Завершено успешно.",
       statusKind: "ok",
     });
+
+    const successBody = result.buildImage
+      ? `${projectPath || label}: ${result.buildImage}`
+      : `${projectPath || label} · promote завершён`;
+    await deliverPromoteOutcome({
+      ok: true,
+      title: "Promote: OK",
+      message: successBody.slice(0, 240),
+      notifId: `promote-ok-${sessionId}`,
+      gitlabBaseUrl: settings.gitlabBaseUrl,
+      projectPath,
+    }).catch((e) => console.warn("[gitlab-notifier] promote success notify:", e));
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") {
       await appendSessionLog(sessionId, "--- отменено пользователем ---");
@@ -324,15 +392,26 @@ async function executePromoteRun(sessionId, form, settings, signal) {
         statusText: "Конфликт при merge — см. уведомление",
         statusKind: "err",
       });
+      // notify уже вызван из onConflict
     } else {
       const message = e instanceof Error ? e.message : String(e);
+      await appendSessionLog(sessionId, "---");
       await appendSessionLog(sessionId, `Ошибка: ${message}`);
+      await appendSessionLog(sessionId, "Подробности — в строках [MR] / [pipelines] / [merge API] выше.");
       await patchSessionById(sessionId, {
         status: "error",
         error: message,
         statusText: message,
         statusKind: "err",
       });
+      await deliverPromoteOutcome({
+        ok: false,
+        title: "Promote: failed",
+        message: `${projectPath || label}: ${message}`.slice(0, 240),
+        notifId: `promote-fail-${sessionId}`,
+        gitlabBaseUrl: settings.gitlabBaseUrl,
+        projectPath,
+      }).catch((err) => console.warn("[gitlab-notifier] promote fail notify:", err));
     }
   } finally {
     runningAborts.delete(sessionId);

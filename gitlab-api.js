@@ -172,6 +172,26 @@ export async function createRefPipeline(apiBase, token, projectPath, ref) {
 }
 
 /**
+ * Retry pipeline (как кнопка Retry в UI) — поднимает skipped/failed jobs.
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function retryPipeline(apiBase, token, projectPath, pipelineId) {
+  const pid = encodeProjectPath(projectPath);
+  const url = `${apiBase}projects/${pid}/pipelines/${pipelineId}/retry`;
+  return gitlabFetch(url, token, { method: "POST", body: {} });
+}
+
+/**
+ * Play manual job (когда status=manual).
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function playJob(apiBase, token, projectPath, jobId) {
+  const pid = encodeProjectPath(projectPath);
+  const url = `${apiBase}projects/${pid}/jobs/${jobId}/play`;
+  return gitlabFetch(url, token, { method: "POST", body: {} });
+}
+
+/**
  * @returns {Promise<Record<string, unknown>[]>}
  */
 export async function listPipelinesForRef(

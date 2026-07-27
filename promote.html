@@ -338,6 +338,137 @@
           color: #eee;
         }
       }
+
+      /* Plan confirmation dialog */
+      #planDialog {
+        border: 1px solid #ccc;
+        border-radius: 10px;
+        padding: 0;
+        max-width: 560px;
+        width: calc(100% - 32px);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+      }
+      #planDialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+      }
+      #planDialog .plan-body {
+        padding: 18px 20px 8px;
+      }
+      #planDialog h2 {
+        margin: 0 0 6px;
+        font-size: 1.15rem;
+      }
+      #planDialog .plan-meta {
+        margin: 0 0 14px;
+        color: #555;
+        font-size: 0.92rem;
+      }
+      #planDialog .plan-meta code {
+        font-size: 0.88em;
+      }
+      #planDialog .plan-flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      #planDialog .plan-flag {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #eee;
+        color: #444;
+      }
+      #planDialog .plan-flag--warn {
+        background: #fff3d6;
+        color: #9a6700;
+      }
+      #planSteps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #planSteps li {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #fafafa;
+      }
+      #planSteps .step-kind {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #666;
+        font-weight: 700;
+      }
+      #planSteps .step-title {
+        font-weight: 700;
+        margin-top: 2px;
+      }
+      #planSteps .step-flow {
+        margin-top: 4px;
+        font-family: ui-monospace, monospace;
+        font-size: 12.5px;
+      }
+      #planSteps .step-flow .arrow {
+        color: #888;
+        margin: 0 6px;
+      }
+      #planSteps .step-note {
+        margin-top: 4px;
+        font-size: 0.88rem;
+        color: #666;
+      }
+      #planSteps .step-mr-title {
+        margin-top: 2px;
+        font-size: 0.9rem;
+        color: #333;
+      }
+      #planDialog .plan-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 12px 20px 18px;
+        border-top: 1px solid #eee;
+        margin-top: 14px;
+      }
+      @media (prefers-color-scheme: dark) {
+        #planDialog {
+          background: #1e1e1e;
+          border-color: #444;
+          color: #eee;
+        }
+        #planDialog .plan-meta {
+          color: #aaa;
+        }
+        #planDialog .plan-flag {
+          background: #333;
+          color: #ccc;
+        }
+        #planDialog .plan-flag--warn {
+          background: #3d341a;
+          color: #e6b422;
+        }
+        #planSteps li {
+          background: #252525;
+          border-color: #444;
+        }
+        #planSteps .step-kind {
+          color: #999;
+        }
+        #planSteps .step-mr-title {
+          color: #ddd;
+        }
+        #planSteps .step-note {
+          color: #aaa;
+        }
+        #planDialog .plan-actions {
+          border-color: #333;
+        }
+      }
     </style>
   </head>
   <body>
@@ -349,7 +480,8 @@
     <div class="main-fields">
       <h1>Promote MR → develop → master/main</h1>
       <p class="lead">
-        Merge feature в develop, promote в production, build-образ. Токен и хост — в настройках
+        Merge feature в develop, promote в production, build-образ. Перед запуском —
+        анализ MR и подтверждение цепочки merge. Токен и хост — в настройках
         (<code>api</code>). Несколько MR можно запускать параллельно — у каждого своя вкладка-сессия.
         Процессы идут в фоне; страницу можно обновить. История — во вкладках сессий (клик по вкладке).
       </p>
@@ -381,8 +513,8 @@
 
         <label>
           Production-ветка (опционально)
-          <input type="text" id="productionBranch" placeholder="main, master или hmao/main" />
-          <span class="hint">Пусто — автоопределение по веткам в репозитории</span>
+          <input type="text" id="productionBranch" placeholder="master, master-bus, hmao/main…" />
+          <span class="hint">Пусто — авто: develop→master, develop-bus→master-bus и т.п.</span>
         </label>
 
         <div class="row">
@@ -435,6 +567,19 @@
         <button type="button" id="newMr" class="primary" hidden>Новый MR</button>
       </div>
     </div>
+
+    <dialog id="planDialog" aria-labelledby="planDialogTitle">
+      <div class="plan-body">
+        <h2 id="planDialogTitle">Подтвердите цепочку merge</h2>
+        <p class="plan-meta" id="planMeta"></p>
+        <div class="plan-flags" id="planFlags" hidden></div>
+        <ol id="planSteps"></ol>
+      </div>
+      <div class="plan-actions">
+        <button type="button" id="planCancel">Отмена</button>
+        <button type="button" id="planConfirm" class="primary">Подтвердить и запустить</button>
+      </div>
+    </dialog>
 
     <script src="promote.js" type="module"></script>
   </body>
