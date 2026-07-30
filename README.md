@@ -4,7 +4,7 @@
 
 ## Возможности
 
-- **Promote MR** — отдельная страница (`promote.html`): цепочка feature → develop (сборка) → production, несколько параллельных сессий (вкладки), лог и build-образ по каждой. Фон service worker — вкладку можно обновить. Токен с scope **`api`**.
+- **Promote MR** — отдельная страница (`promote.html`): цепочка feature → staging → production (маски веток настраиваются), несколько параллельных сессий (вкладки), лог и build-образ по каждой. Фон service worker — вкладку можно обновить. Токен с scope **`api`**.
 - Системное **уведомление** браузера с иконкой (успех / ошибка).
 - Опциональный **звуковой сигнал** (через offscreen-документ): **разные файлы** для успеха (`sounds/notify.wav`) и ошибки (`sounds/notify-fail.wav`) — при желании замените их своими WAV с теми же именами.
 - Префикс **`[CI OK]`** / **`[CI FAIL]`** в заголовке вкладки.
@@ -37,7 +37,8 @@
    - **имя stage** (по умолчанию `build`);
    - **интервал опроса** (секунды, ограничен диапазоном в интерфейсе);
    - трактовку **skipped** / **canceled**;
-   - включение **мигания favicon** и **звука**.
+   - включение **мигания favicon** и **звука**;
+   - **маски веток** для Promote (staging → production), если флоу отличается от `develop` → `master`/`main`.
 
 Кнопка **«Сбросить уже уведомлено»** очищает кэш: следующее завершение того же пайплайна снова вызовет уведомление (удобно для отладки).
 
@@ -84,7 +85,7 @@
 | `background.js`     | Опрос, логика stage, уведомления, вызов звука и скриптов на вкладке. |
 | `gitlab-api.js`     | Обёртки над GitLab REST API v4. |
 | `options.html/js`   | Страница настроек. |
-| `promote.html/js`   | Promote MR (feature → develop → master/main). |
+| `promote.html/js`   | Promote MR (feature → staging → production). |
 | `gitlab-promote.js` | Логика promote (порт `gitlab-promote-mr.py`). |
 | `promote-runner.js` | Фоновый запуск promote и сохранение сессии. |
 | `popup.html/js`     | Краткий попап, настройки и ссылка на promote. |

@@ -1,6 +1,7 @@
 /**
- * Promote feature MR → develop → production (master/main).
+ * Promote feature MR → staging → production.
  * Port of gitlab-promote-mr.py for the extension UI.
+ * Сопоставление веток — через настраиваемые маски (см. DEFAULT_BRANCH_MAPPINGS).
  */
 
 import {
@@ -225,12 +226,31 @@ const MR_URL_RE =
 const MR_REF_RE = /^(?<project>.+?)!(?<iid>\d+)$/;
 const UNTAGGED_IMAGE_RE = /Untagged:\s*(\S+)/g;
 const IMAGE_LINE_RE = /^[^\s:]+:[^\s:]+$/;
-const PRODUCTION_SUFFIXES = ["master", "main"];
+
+/**
+ * Правила сопоставления staging → production (по одной маске на строку).
+ * `*` — один сегмент пути (без `/`). Справа через запятую — кандидаты.
+ * Порядок: первое совпадение побеждает.
+ */
+export const DEFAULT_BRANCH_MAPPINGS = `# Стандартный флоу: feature → develop → master|main
+develop → master, main
+
+# Префикс пути: team/develop → team/master
+*/develop → */master, */main
+
+# Суффикс: develop-env → master-env
+develop-* → master-*, main-*
+
+# Префикс + суффикс: team/develop-env → team/master-env
+*/develop-* → */master-*, */main-*
+`;
 
 /**
  * @typedef {{ project: string, iid: number }} MrRef
  * @typedef {(line: string) => void} LogFn
  * @typedef {{ signal?: AbortSignal, log?: LogFn, heartbeat?: () => void, onBuildImage?: (image: string) => void, onConflict?: (mr: Record<string, unknown>, message: string) => void }} PromoteHooks
+ * @typedef {{ staging: string, production: string[] }} BranchMappingRule
+ * @typedef {{ rule: BranchMappingRule, captures: string[], candidates: string[] }} BranchMappingMatch
  */
 
 export class MrMergeConflictError extends Error {
@@ -297,64 +317,249 @@ export function parseMrArgList(primary, batchText) {
 }
 
 /**
- * @param {string} targetBranch
+ * @param {string} text
+ * @returns {string}
  */
-export function requireDevelopTarget(targetBranch) {
-  if (!targetBranch.toLowerCase().includes("develop")) {
-    throw new Error(
-      `Target-ветка ${JSON.stringify(targetBranch)} должна содержать develop ` +
-        `(например develop, develop-bus, hmao/develop)`
-    );
-  }
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
- * develop → master/main; develop-bus → master-bus/main-bus;
- * hmao/develop-road → hmao/master-road / hmao/main-road.
- * @param {string} developBranch
- * @returns {{ prefix: string | null, leaf: string, candidates: string[] }}
+ * Маска с `*` → RegExp: каждый `*` захватывает один сегмент (`[^/]*`).
+ * @param {string} pattern
+ * @returns {RegExp}
  */
-export function productionCandidates(developBranch) {
-  const parts = developBranch.split("/");
-  const leaf = parts[parts.length - 1];
-  if (!leaf.toLowerCase().includes("develop")) {
-    throw new Error(
-      `Не удалось вывести production-ветку из develop ${JSON.stringify(developBranch)}`
-    );
+function maskToRegExp(pattern) {
+  const parts = pattern.split("*");
+  let source = "^";
+  for (let i = 0; i < parts.length; i++) {
+    source += escapeRegex(parts[i]);
+    if (i < parts.length - 1) source += "([^/]*)";
   }
-  const prefix = parts.length >= 2 ? parts.slice(0, -1).join("/") : null;
-  const candidates = PRODUCTION_SUFFIXES.map((prod) => {
-    const prodLeaf = leaf.replace(/develop/i, prod);
-    return prefix ? `${prefix}/${prodLeaf}` : prodLeaf;
-  });
-  return { prefix, leaf, candidates };
+  source += "$";
+  return new RegExp(source, "i");
 }
 
 /**
- * @param {string} override
+ * Подставить захваты `*` в шаблон production-ветки.
+ * @param {string} template
+ * @param {string[]} captures
  */
-function productionSuffixFromOverride(override) {
-  const value = override.trim().toLowerCase();
-  if (PRODUCTION_SUFFIXES.includes(value)) return value;
+function expandMask(template, captures) {
+  let i = 0;
+  return template.replace(/\*/g, () => captures[i++] ?? "");
+}
+
+/**
+ * Первое «слово» в маске — для bare override (`master` → соответствующий кандидат).
+ * @param {string} template
+ */
+function maskKeyword(template) {
+  const m = template.match(/[a-zA-Z0-9]+/);
+  return m ? m[0].toLowerCase() : "";
+}
+
+/**
+ * Разобрать текст правил из настроек.
+ * @param {string} [text]
+ * @returns {BranchMappingRule[]}
+ */
+export function parseBranchMappings(text) {
+  const raw = (text ?? "").trim() ? text : DEFAULT_BRANCH_MAPPINGS;
+  /** @type {BranchMappingRule[]} */
+  const rules = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const arrow = trimmed.split(/\s*→\s*|\s*->\s*/);
+    if (arrow.length !== 2) {
+      throw new Error(
+        `Некорректное правило сопоставления веток: ${JSON.stringify(trimmed)}. ` +
+          `Ожидается: staging → production[, production…]`
+      );
+    }
+    const staging = arrow[0].trim();
+    const production = arrow[1]
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (!staging || !production.length) {
+      throw new Error(
+        `Некорректное правило сопоставления веток: ${JSON.stringify(trimmed)}`
+      );
+    }
+    const stagingStars = (staging.match(/\*/g) || []).length;
+    for (const prod of production) {
+      const prodStars = (prod.match(/\*/g) || []).length;
+      if (prodStars !== stagingStars) {
+        throw new Error(
+          `В правиле ${JSON.stringify(trimmed)} число \`*\` слева (${stagingStars}) ` +
+            `не совпадает с ${JSON.stringify(prod)} (${prodStars})`
+        );
+      }
+    }
+    rules.push({ staging, production });
+  }
+  if (!rules.length) {
+    throw new Error(
+      "Нет правил сопоставления веток. Добавьте хотя бы одно в настройках " +
+        "(например: develop → master, main)"
+    );
+  }
+  return rules;
+}
+
+/**
+ * @param {string} stagingBranch
+ * @param {BranchMappingRule[]} rules
+ * @returns {BranchMappingMatch}
+ */
+export function matchBranchMapping(stagingBranch, rules) {
+  for (const rule of rules) {
+    const re = maskToRegExp(rule.staging);
+    const m = re.exec(stagingBranch);
+    if (!m) continue;
+    const captures = m.slice(1);
+    const candidates = rule.production.map((tmpl) => expandMask(tmpl, captures));
+    return { rule, captures, candidates };
+  }
   throw new Error(
-    `Некорректная production-ветка ${JSON.stringify(override)}; укажите main или master, либо полное имя ветки`
+    `Target-ветка ${JSON.stringify(stagingBranch)} не подходит ни под одно правило staging. ` +
+      `Настройте маски в параметрах расширения (сейчас: ${rules
+        .map((r) => r.staging)
+        .join(", ")})`
   );
 }
 
 /**
- * @param {string} developLeaf e.g. develop-bus
- * @param {string} productionBase master | main
+ * @param {string} targetBranch
+ * @param {BranchMappingRule[]} rules
  */
-function productionLeafFromDevelop(developLeaf, productionBase) {
-  return developLeaf.replace(/develop/i, productionBase);
+export function requireStagingTarget(targetBranch, rules) {
+  matchBranchMapping(targetBranch, rules);
 }
 
 /**
- * @param {string | null} prefix
- * @param {string} leaf
+ * @deprecated используйте requireStagingTarget
+ * @param {string} targetBranch
+ * @param {BranchMappingRule[]} [rules]
  */
-function buildProductionBranch(prefix, leaf) {
-  return prefix ? `${prefix}/${leaf}` : leaf;
+export function requireDevelopTarget(targetBranch, rules) {
+  requireStagingTarget(targetBranch, rules ?? parseBranchMappings());
+}
+
+/**
+ * Кандидаты production-веток по маскам из настроек.
+ * @param {string} developBranch
+ * @param {BranchMappingRule[] | string} [mappings]
+ * @returns {{ prefix: string | null, leaf: string, candidates: string[], match: BranchMappingMatch }}
+ */
+export function productionCandidates(developBranch, mappings) {
+  const rules =
+    typeof mappings === "string" || mappings == null
+      ? parseBranchMappings(mappings)
+      : mappings;
+  const match = matchBranchMapping(developBranch, rules);
+  const parts = developBranch.split("/");
+  const leaf = parts[parts.length - 1];
+  const prefix = parts.length >= 2 ? parts.slice(0, -1).join("/") : null;
+  return { prefix, leaf, candidates: match.candidates, match };
+}
+
+/**
+ * @param {BranchMappingMatch} match
+ * @param {string} override
+ */
+function resolveProductionOverride(match, override) {
+  const o = override.trim();
+  if (match.candidates.includes(o)) return o;
+
+  const bare = !o.includes("/");
+  if (bare) {
+    const byKeyword = match.rule.production.find(
+      (tmpl) => maskKeyword(tmpl) === o.toLowerCase()
+    );
+    if (byKeyword) return expandMask(byKeyword, match.captures);
+
+    const byLeaf = match.candidates.filter((c) => c.split("/").pop() === o);
+    if (byLeaf.length === 1) return byLeaf[0];
+  }
+
+  return o;
+}
+
+/**
+ * @param {string} apiBase
+ * @param {string} token
+ * @param {string} project
+ * @param {string} developBranch
+ * @param {string | undefined} override
+ * @param {AbortSignal} [signal]
+ * @param {BranchMappingRule[] | string} [mappings]
+ */
+export async function resolveProductionBranch(
+  apiBase,
+  token,
+  project,
+  developBranch,
+  override,
+  signal,
+  mappings
+) {
+  const { candidates, match } = productionCandidates(developBranch, mappings);
+
+  if (override?.trim()) {
+    const branch = resolveProductionOverride(match, override);
+    checkAborted(signal);
+    if (!(await branchExists(apiBase, token, project, branch))) {
+      throw new Error(`Production-ветка ${JSON.stringify(branch)} не найдена в ${project}`);
+    }
+    return branch;
+  }
+
+  checkAborted(signal);
+  const existing = [];
+  for (const b of candidates) {
+    checkAborted(signal);
+    if (await branchExists(apiBase, token, project, b)) existing.push(b);
+  }
+
+  checkAborted(signal);
+  const projectInfo = await getProject(apiBase, token, project);
+  const defaultBranch = String(projectInfo.default_branch || "master");
+
+  if (existing.length === 1) return existing[0];
+
+  if (existing.length > 1) {
+    if (existing.includes(defaultBranch)) return defaultBranch;
+    const byDefaultKeyword = match.rule.production.find(
+      (tmpl) => maskKeyword(tmpl) === defaultBranch.toLowerCase()
+    );
+    if (byDefaultKeyword) {
+      const preferred = expandMask(byDefaultKeyword, match.captures);
+      if (existing.includes(preferred)) return preferred;
+    }
+    return existing[0];
+  }
+
+  // existing.length === 0 — fallback на default_branch проекта, если он среди кандидатов
+  if (candidates.includes(defaultBranch)) {
+    checkAborted(signal);
+    if (await branchExists(apiBase, token, project, defaultBranch)) return defaultBranch;
+  }
+  const byDefaultKeyword = match.rule.production.find(
+    (tmpl) => maskKeyword(tmpl) === defaultBranch.toLowerCase()
+  );
+  if (byDefaultKeyword) {
+    const fallback = expandMask(byDefaultKeyword, match.captures);
+    checkAborted(signal);
+    if (await branchExists(apiBase, token, project, fallback)) return fallback;
+  }
+
+  throw new Error(
+    `Production-ветка для ${JSON.stringify(developBranch)} не найдена в ${project} ` +
+      `(пробовали: ${candidates.join(", ")}; default_branch: ${defaultBranch})`
+  );
 }
 
 function checkAborted(signal) {
@@ -402,81 +607,6 @@ function sleep(ms, signal) {
       { once: true }
     );
   });
-}
-
-/**
- * @param {string} apiBase
- * @param {string} token
- * @param {string} project
- * @param {string} developBranch
- * @param {string | undefined} override
- * @param {AbortSignal} [signal]
- */
-export async function resolveProductionBranch(
-  apiBase,
-  token,
-  project,
-  developBranch,
-  override,
-  signal
-) {
-  const { prefix, leaf, candidates } = productionCandidates(developBranch);
-
-  if (override?.trim()) {
-    const o = override.trim();
-    const isBareSuffix = PRODUCTION_SUFFIXES.includes(o.toLowerCase());
-    const branch = isBareSuffix
-      ? buildProductionBranch(prefix, productionLeafFromDevelop(leaf, productionSuffixFromOverride(o)))
-      : o;
-    checkAborted(signal);
-    if (!(await branchExists(apiBase, token, project, branch))) {
-      throw new Error(`Production-ветка ${JSON.stringify(branch)} не найдена в ${project}`);
-    }
-    return branch;
-  }
-
-  checkAborted(signal);
-  const existing = [];
-  for (const b of candidates) {
-    checkAborted(signal);
-    if (await branchExists(apiBase, token, project, b)) existing.push(b);
-  }
-
-  checkAborted(signal);
-  const projectInfo = await getProject(apiBase, token, project);
-  const defaultBranch = String(projectInfo.default_branch || "master");
-
-  if (existing.length === 1) return existing[0];
-
-  if (existing.length > 1) {
-    if (existing.includes(defaultBranch)) return defaultBranch;
-    if (PRODUCTION_SUFFIXES.includes(defaultBranch)) {
-      const preferred = buildProductionBranch(
-        prefix,
-        productionLeafFromDevelop(leaf, defaultBranch)
-      );
-      if (existing.includes(preferred)) return preferred;
-    }
-    return existing[0];
-  }
-
-  // existing.length === 0
-  if (PRODUCTION_SUFFIXES.includes(defaultBranch)) {
-    const fallback = buildProductionBranch(
-      prefix,
-      productionLeafFromDevelop(leaf, defaultBranch)
-    );
-    checkAborted(signal);
-    if (await branchExists(apiBase, token, project, fallback)) return fallback;
-  } else if (candidates.includes(defaultBranch)) {
-    checkAborted(signal);
-    if (await branchExists(apiBase, token, project, defaultBranch)) return defaultBranch;
-  }
-
-  throw new Error(
-    `Production-ветка для ${JSON.stringify(developBranch)} не найдена в ${project} ` +
-      `(пробовали: ${candidates.join(", ")}; default_branch: ${defaultBranch})`
-  );
 }
 
 /**
@@ -1305,14 +1435,15 @@ function ensureMergeable(mr, label, hooks, log) {
  * @param {string} apiBase
  * @param {string} token
  * @param {MrRef[]} refs
+ * @param {BranchMappingRule[]} rules
  * @param {AbortSignal} [signal]
  */
-async function loadAndValidateBatch(apiBase, token, refs, signal) {
+async function loadAndValidateBatch(apiBase, token, refs, rules, signal) {
   const mrs = [];
   for (const ref of refs) {
     checkAborted(signal);
     const mr = await getMergeRequest(apiBase, token, ref.project, ref.iid);
-    requireDevelopTarget(String(mr.target_branch));
+    requireStagingTarget(String(mr.target_branch), rules);
     mrs.push({ ref, mr });
   }
 
@@ -1328,7 +1459,7 @@ async function loadAndValidateBatch(apiBase, token, refs, signal) {
     const target = String(mrs[i].mr.target_branch);
     if (target !== developBranch) {
       throw new Error(
-        `MR !${refs[i].iid} target ${target} ≠ ${developBranch} — все MR должны идти в одну develop-ветку`
+        `MR !${refs[i].iid} target ${target} ≠ ${developBranch} — все MR должны идти в одну staging-ветку`
       );
     }
   }
@@ -1349,6 +1480,7 @@ async function loadAndValidateBatch(apiBase, token, refs, signal) {
  * @property {string} [productionBranch]
  * @property {string} [buildStage]
  * @property {boolean} [skipBuildImage]
+ * @property {string} [branchMappings] Текст правил staging → production из настроек
  */
 
 /**
@@ -1401,9 +1533,10 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
   const skipBuildImage = Boolean(options.skipBuildImage);
   const waitFeaturePipeline = Boolean(options.waitFeaturePipeline);
   const buildStage = (options.buildStage || "build").trim();
+  const branchRules = parseBranchMappings(options.branchMappings);
 
   checkAborted(signal);
-  const batch = await loadAndValidateBatch(apiBase, token, refs, signal);
+  const batch = await loadAndValidateBatch(apiBase, token, refs, branchRules, signal);
   const { project, developBranch, mrs } = batch;
 
   /** @type {string | null} */
@@ -1411,7 +1544,7 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
   if (!stopAfterFeature) {
     const productionOverride = options.productionBranch?.trim() || "";
     if (dryRun && !productionOverride) {
-      productionBranch = productionCandidates(developBranch).candidates[0];
+      productionBranch = productionCandidates(developBranch, branchRules).candidates[0];
     } else {
       productionBranch = await resolveProductionBranch(
         apiBase,
@@ -1419,7 +1552,8 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
         project,
         developBranch,
         productionOverride || undefined,
-        signal
+        signal,
+        branchRules
       );
     }
   }
@@ -1521,6 +1655,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   const pipelineTimeout = options.pipelineTimeoutSec ?? 7200;
   const pollSec = options.pollIntervalSec ?? 20;
   const buildStage = (options.buildStage || "build").trim();
+  const branchRules = parseBranchMappings(options.branchMappings);
 
   log(`Параметры: timeout=${pipelineTimeout}s, poll=${pollSec}s, buildStage=${JSON.stringify(buildStage)}, ` +
     `dryRun=${dryRun}, waitFeaturePipeline=${Boolean(options.waitFeaturePipeline)}, ` +
@@ -1535,7 +1670,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   }
 
   checkAborted(signal);
-  const batch = await loadAndValidateBatch(apiBase, token, refs, signal);
+  const batch = await loadAndValidateBatch(apiBase, token, refs, branchRules, signal);
   const { project, developBranch, mrs } = batch;
   let featureMr = mrs[mrs.length - 1].mr;
 
@@ -1546,7 +1681,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   let productionBranch;
   const productionOverride = options.productionBranch?.trim() || "";
   if (dryRun && !productionOverride) {
-    const { candidates } = productionCandidates(developBranch);
+    const { candidates } = productionCandidates(developBranch, branchRules);
     productionBranch = candidates[0];
     log(
       `Dry run: production не проверяется через API; предполагаем ${JSON.stringify(productionBranch)}`
@@ -1558,7 +1693,8 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
       project,
       developBranch,
       productionOverride || undefined,
-      signal
+      signal,
+      branchRules
     );
   }
 

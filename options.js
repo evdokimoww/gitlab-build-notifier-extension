@@ -1,3 +1,8 @@
+import {
+  DEFAULT_BRANCH_MAPPINGS,
+  parseBranchMappings,
+} from "./gitlab-promote.js";
+
 const defaults = {
   gitlabBaseUrl: "https://git-02.t1-group.ru",
   privateToken: "",
@@ -8,6 +13,8 @@ const defaults = {
   enableFaviconTint: true,
   enableNotificationSound: true,
   projectWhitelist: "",
+  uiTheme: "system",
+  promoteBranchMappings: DEFAULT_BRANCH_MAPPINGS,
 };
 
 function $(id) {
@@ -27,6 +34,12 @@ async function load() {
   $("enableFaviconTint").checked = s.enableFaviconTint;
   $("enableNotificationSound").checked = s.enableNotificationSound;
   $("projectWhitelist").value = s.projectWhitelist;
+  $("promoteBranchMappings").value =
+    s.promoteBranchMappings?.trim() ? s.promoteBranchMappings : DEFAULT_BRANCH_MAPPINGS;
+  $("themeToggle").checked =
+    s.uiTheme === "dark" ||
+    (s.uiTheme === "system" &&
+      globalThis.matchMedia("(prefers-color-scheme: dark)").matches);
 }
 
 function setStatus(text, ok) {
@@ -43,9 +56,21 @@ async function ensureHostPermission(gitlabBaseUrl) {
   return chrome.permissions.request({ origins: [originPat] });
 }
 
+$("themeToggle").addEventListener("change", async () => {
+  const theme = $("themeToggle").checked ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  await chrome.storage.local.set({ uiTheme: theme });
+  setStatus(
+    theme === "dark" ? "Тёмная тема включена." : "Светлая тема включена.",
+    true,
+  );
+});
+
 $("save").addEventListener("click", async () => {
   setStatus("Сохранение…", undefined);
-  const gitlabBaseUrl = $("gitlabBaseUrl").value.trim() || defaults.gitlabBaseUrl;
+  const gitlabBaseUrl =
+    $("gitlabBaseUrl").value.trim() || defaults.gitlabBaseUrl;
   try {
     new URL(gitlabBaseUrl);
   } catch {
@@ -56,7 +81,10 @@ $("save").addEventListener("click", async () => {
   try {
     const okPerm = await ensureHostPermission(gitlabBaseUrl);
     if (!okPerm) {
-      setStatus("Нужен доступ к хосту GitLab в запросе разрешений браузера", false);
+      setStatus(
+        "Нужен доступ к хосту GitLab в запросе разрешений браузера",
+        false,
+      );
       return;
     }
   } catch (e) {
@@ -64,7 +92,22 @@ $("save").addEventListener("click", async () => {
     return;
   }
 
-  const pollIntervalSec = Math.min(600, Math.max(10, Number($("pollIntervalSec").value) || 25));
+  const pollIntervalSec = Math.min(
+    600,
+    Math.max(10, Number($("pollIntervalSec").value) || 25),
+  );
+
+  let promoteBranchMappings = $("promoteBranchMappings").value;
+  if (!promoteBranchMappings.trim()) {
+    promoteBranchMappings = DEFAULT_BRANCH_MAPPINGS;
+    $("promoteBranchMappings").value = DEFAULT_BRANCH_MAPPINGS;
+  }
+  try {
+    parseBranchMappings(promoteBranchMappings);
+  } catch (e) {
+    setStatus(e instanceof Error ? e.message : String(e), false);
+    return;
+  }
 
   await chrome.storage.local.set({
     gitlabBaseUrl,
@@ -76,6 +119,7 @@ $("save").addEventListener("click", async () => {
     enableFaviconTint: $("enableFaviconTint").checked,
     enableNotificationSound: $("enableNotificationSound").checked,
     projectWhitelist: $("projectWhitelist").value.trim(),
+    promoteBranchMappings,
   });
 
   setStatus("Сохранено.", true);
@@ -83,7 +127,10 @@ $("save").addEventListener("click", async () => {
 
 $("resetNotified").addEventListener("click", async () => {
   await chrome.storage.local.set({ notified: {} });
-  setStatus("Кэш уведомлений сброшен — следующий завершённый build снова вызовет оповещение.", true);
+  setStatus(
+    "Кэш уведомлений сброшен — следующий завершённый build снова вызовет оповещение.",
+    true,
+  );
 });
 
 load().catch((e) => setStatus(String(e), false));

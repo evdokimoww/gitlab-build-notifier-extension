@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
@@ -6,566 +6,1307 @@
     <style>
       :root {
         color-scheme: light dark;
+        --bg: #eef0f3;
+        --bg-grid: rgba(38, 45, 56, 0.045);
+        --surface: #ffffff;
+        --surface-raised: #ffffff;
+        --surface-soft: #f5f6f8;
+        --surface-inset: #e9ebef;
+        --text: #17191d;
+        --text-soft: #5e6470;
+        --text-faint: #858b96;
+        --border: #d9dce2;
+        --border-strong: #c5c9d1;
+        --accent: #fc6d26;
+        --accent-dark: #c94d0b;
+        --accent-soft: #fff0e8;
+        --focus: #3f73d8;
+        --ok: #16805c;
+        --ok-soft: #e5f5ee;
+        --warn: #a15c00;
+        --warn-soft: #fff2d9;
+        --err: #c33149;
+        --err-soft: #fde9ed;
+        --running: #3468c0;
+        --running-soft: #e8effc;
+        --console: #17191d;
+        --console-border: #292d34;
+        --console-text: #d8dce3;
+        --shadow: 0 18px 42px rgba(28, 33, 41, 0.08);
+        --shadow-small: 0 4px 14px rgba(28, 33, 41, 0.07);
+        --radius: 14px;
+        --radius-small: 9px;
+        --sans: "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
       }
-      html,
-      body {
-        height: 100%;
-      }
-      body {
-        font-family: system-ui, sans-serif;
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 20px 16px 32px;
-        line-height: 1.5;
+
+      * {
         box-sizing: border-box;
-        display: flex;
-        flex-direction: column;
+      }
+
+      html {
         min-height: 100%;
       }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        color: var(--text);
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(var(--bg-grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+        background-size: 32px 32px;
+        font-family: var(--sans);
+        line-height: 1.45;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      a,
+      summary,
+      input,
+      textarea {
+        outline: none;
+      }
+
+      button:focus-visible,
+      a:focus-visible,
+      summary:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent);
+      }
+
+      .app-shell {
+        width: min(1440px, 100%);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 0 28px 32px;
+      }
+
+      .topbar {
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        min-width: 0;
+      }
+
+      .brand-mark {
+        width: 31px;
+        height: 31px;
+        position: relative;
+        flex: 0 0 auto;
+        border-radius: 9px;
+        background: linear-gradient(145deg, #ff8a49, var(--accent));
+        box-shadow: 0 6px 16px rgba(252, 109, 38, 0.28);
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        content: "";
+        position: absolute;
+        background: #fff;
+      }
+
+      .brand-mark::before {
+        width: 12px;
+        height: 3px;
+        left: 9px;
+        top: 14px;
+        border-radius: 999px;
+      }
+
+      .brand-mark::after {
+        width: 6px;
+        height: 6px;
+        left: 12px;
+        top: 12px;
+        border: 2px solid #fff;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      .brand-name {
+        font-weight: 750;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+      }
+
+      .brand-product {
+        color: var(--text-faint);
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .nav a {
+        color: var(--text-soft);
+        padding: 7px 10px;
+        border-radius: 7px;
+        font-size: 13px;
+        font-weight: 650;
+        text-decoration: none;
+        transition:
+          color 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .nav a:hover {
+        color: var(--text);
+        background: var(--surface-inset);
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.8fr) minmax(540px, 1.2fr);
+        gap: 60px;
+        align-items: end;
+        padding: 44px 4px 34px;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 11px;
+        color: var(--accent-dark);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+      }
+
       h1 {
-        font-size: 1.35rem;
-        margin-bottom: 0.25rem;
+        max-width: 620px;
+        margin: 0;
+        font-size: clamp(30px, 3vw, 44px);
+        font-weight: 720;
+        letter-spacing: -0.045em;
+        line-height: 1.04;
       }
+
       .lead {
-        color: #555;
-        margin-top: 0;
-        margin-bottom: 1rem;
+        max-width: 650px;
+        margin: 15px 0 0;
+        color: var(--text-soft);
+        font-size: 14px;
       }
+
+      code {
+        font-family: var(--mono);
+      }
+
+      .pipeline-map {
+        display: grid;
+        grid-template-columns: 1fr 34px 1fr 34px 1fr;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .pipeline-stage {
+        min-width: 0;
+        padding: 15px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-small);
+        background: color-mix(in srgb, var(--surface) 84%, transparent);
+        box-shadow: var(--shadow-small);
+      }
+
+      .pipeline-stage--accent {
+        border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+        background: var(--accent-soft);
+      }
+
+      .stage-index {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .stage-name {
+        display: block;
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 750;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .stage-caption {
+        display: block;
+        margin-top: 2px;
+        overflow: hidden;
+        color: var(--text-soft);
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pipeline-link {
+        height: 1px;
+        position: relative;
+        background: var(--border-strong);
+      }
+
+      .pipeline-link::after {
+        content: "";
+        width: 5px;
+        height: 5px;
+        position: absolute;
+        top: -3px;
+        right: 0;
+        border-top: 1px solid var(--border-strong);
+        border-right: 1px solid var(--border-strong);
+        transform: rotate(45deg);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(350px, 0.78fr) minmax(480px, 1.22fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .panel {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .control-panel {
+        padding-bottom: 22px;
+      }
+
+      .activity-panel {
+        min-height: 630px;
+        display: flex;
+        flex-direction: column;
+        padding-bottom: 14px;
+      }
+
+      .panel-head {
+        min-height: 66px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface-soft);
+      }
+
+      .panel-kicker {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .panel-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 750;
+        letter-spacing: -0.015em;
+      }
+
+      .panel-state {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 650;
+        text-transform: uppercase;
+      }
+
+      .panel-state::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 0 4px var(--ok-soft);
+      }
+
+      .form-body {
+        padding: 5px 20px 0;
+      }
+
       label {
         display: block;
-        margin-top: 14px;
-        font-weight: 600;
+        margin-top: 17px;
+        font-size: 13px;
+        font-weight: 700;
       }
+
+      .field-tag {
+        margin-left: 5px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
       input[type="text"],
       input[type="number"],
       textarea {
         width: 100%;
-        box-sizing: border-box;
-        margin-top: 6px;
-        padding: 8px;
-        font: inherit;
-      }
-      textarea {
-        min-height: 72px;
-        font-family: ui-monospace, monospace;
-        font-size: 12px;
-        resize: vertical;
-      }
-      .hint {
-        color: #666;
-        font-size: 0.88rem;
-        font-weight: normal;
-        margin-top: 4px;
-      }
-      .accordion {
-        margin-top: 12px;
-        border: 1px solid #ccc;
+        margin-top: 7px;
+        padding: 10px 12px;
+        color: var(--text);
+        border: 1px solid var(--border-strong);
         border-radius: 8px;
-        padding: 12px 30px;
-        background: #fafafa;
-      }
-      .accordion > summary {
-        cursor: pointer;
-        font-weight: 600;
-        padding: 12px 4px;
-        list-style-position: outside;
-      }
-      .accordion[open] > summary {
-        margin-bottom: 4px;
-      }
-      .accordion .row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px 20px;
-        margin-top: 8px;
-      }
-      .accordion .row label {
-        margin-top: 0;
-        font-weight: normal;
-      }
-      .accordion label {
-        margin-top: 12px;
-      }
-      .actions {
-        margin-top: 16px;
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
-      button {
-        padding: 10px 18px;
-        cursor: pointer;
-        font: inherit;
-      }
-      button:disabled {
-        opacity: 0.55;
-        cursor: not-allowed;
-      }
-      button.primary {
-        font-weight: 600;
-      }
-      #logPanel {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        margin-top: 12px;
-      }
-      #log {
-        flex: 1;
-        margin: 0;
-        padding: 14px;
-        min-height: 420px;
-        height: calc(100vh - 340px);
-        max-height: 720px;
-        overflow: auto;
-        font-family: ui-monospace, monospace;
-        font-size: 12px;
-        line-height: 1.45;
-        background: #f4f4f5;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      @media (prefers-color-scheme: dark) {
-        #log {
-          background: #1e1e1e;
-          border-color: #444;
-        }
-        .accordion {
-          background: #1a1a1a;
-          border-color: #444;
-        }
-        .lead,
-        .hint {
-          color: #aaa;
-        }
-      }
-      #buildImageBlock {
-        margin-top: 16px;
-        display: none;
-        padding-top: 12px;
-        border-top: 1px solid #ddd;
-      }
-      #buildImageBlock.visible {
-        display: block;
-      }
-      #buildImage {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 8px;
-        font-family: ui-monospace, monospace;
-        font-size: 12px;
-      }
-      .build-actions {
-        margin-top: 10px;
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .nav {
-        margin-bottom: 12px;
-        font-size: 0.95rem;
-      }
-      .nav a {
-        color: #1068bf;
-        margin-right: 14px;
-      }
-      #statusLine {
-        margin-top: 8px;
-        min-height: 1.4em;
-        flex-shrink: 0;
-      }
-      .ok {
-        color: #0d8050;
-      }
-      .err {
-        color: #b00020;
-      }
-      .warn {
-        color: #9a6700;
-      }
-      .main-fields {
-        flex-shrink: 0;
-      }
-      .session-bar {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 12px;
-        padding: 10px 0 4px;
-        border-top: 1px solid #ddd;
-      }
-      .session-bar[hidden] {
-        display: none;
-      }
-      .session-tab {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 11px;
-        border: 2px solid transparent;
-        border-radius: 8px;
-        background: #f0f0f0;
-        font-size: 12px;
-        max-width: 100%;
-        opacity: 0.78;
-        cursor: pointer;
+        background: var(--surface-raised);
         transition:
-          background 0.15s ease,
           border-color 0.15s ease,
+          box-shadow 0.15s ease,
+          background 0.15s ease;
+      }
+
+      input[type="text"]:hover,
+      input[type="number"]:hover,
+      textarea:hover {
+        border-color: color-mix(in srgb, var(--text-faint) 70%, var(--border));
+      }
+
+      input[type="text"]:focus,
+      input[type="number"]:focus,
+      textarea:focus {
+        border-color: var(--focus);
+        background: var(--surface);
+      }
+
+      input::placeholder,
+      textarea::placeholder {
+        color: var(--text-faint);
+        opacity: 0.82;
+      }
+
+      textarea {
+        min-height: 86px;
+        resize: vertical;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.55;
+      }
+
+      .hint {
+        display: block;
+        margin-top: 5px;
+        color: var(--text-faint);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.45;
+      }
+
+      .accordion {
+        margin-top: 18px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--surface-soft);
+      }
+
+      .accordion > summary {
+        position: relative;
+        cursor: pointer;
+        padding: 12px 38px 12px 13px;
+        font-size: 12px;
+        font-weight: 750;
+        list-style: none;
+        user-select: none;
+      }
+
+      .accordion > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .accordion > summary::after {
+        content: "+";
+        position: absolute;
+        top: 8px;
+        right: 12px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 18px;
+        font-weight: 400;
+      }
+
+      .accordion[open] > summary {
+        border-bottom: 1px solid var(--border);
+      }
+
+      .accordion[open] > summary::after {
+        content: "−";
+      }
+
+      .accordion-content {
+        padding: 0 13px 15px;
+      }
+
+      .accordion .row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 13px;
+        margin-top: 14px;
+      }
+
+      .accordion .row label {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        margin-top: 0;
+        color: var(--text-soft);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      input[type="checkbox"] {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        margin: 1px 0 0;
+        accent-color: var(--accent);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin-top: 18px;
+      }
+
+      button {
+        min-height: 38px;
+        padding: 8px 15px;
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--surface-raised);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+        transition:
+          transform 0.15s ease,
+          border-color 0.15s ease,
+          background 0.15s ease,
           box-shadow 0.15s ease,
           opacity 0.15s ease;
       }
-      .session-tab:hover:not(.session-tab--active) {
-        opacity: 0.95;
-        background: #e8e8e8;
-      }
-      .session-tab--active {
-        opacity: 1;
-        background: #dceeff;
-        border-color: #1068bf;
-        box-shadow:
-          0 0 0 1px #1068bf,
-          0 3px 10px rgba(16, 104, 191, 0.28);
+
+      button:hover:not(:disabled) {
+        border-color: var(--text-faint);
+        background: var(--surface-soft);
         transform: translateY(-1px);
       }
-      .session-tab--active.session-tab--running {
-        background: #dceeff;
-        border-color: #1068bf;
+
+      button:active:not(:disabled) {
+        transform: translateY(0);
       }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      button.primary {
+        color: #fff;
+        border-color: var(--accent-dark);
+        background: linear-gradient(180deg, #ff7f3f, var(--accent));
+        box-shadow: 0 5px 13px rgba(252, 109, 38, 0.22);
+      }
+
+      button.primary:hover:not(:disabled) {
+        border-color: var(--accent-dark);
+        background: linear-gradient(180deg, #ff8a50, #f36018);
+        box-shadow: 0 7px 17px rgba(252, 109, 38, 0.3);
+      }
+
+      #run {
+        min-width: 118px;
+      }
+
+      .activity-meta {
+        padding: 0 14px;
+      }
+
+      #statusLine {
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        margin: 0;
+        padding: 10px 7px;
+        color: var(--text-soft);
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      #statusLine:empty::before {
+        content: "Сессия не запущена";
+        color: var(--text-faint);
+        font-weight: 500;
+      }
+
+      #statusLine.ok {
+        color: var(--ok);
+      }
+
+      #statusLine.err {
+        color: var(--err);
+      }
+
+      #statusLine.warn {
+        color: var(--warn);
+      }
+
+      .session-bar {
+        display: flex;
+        gap: 7px;
+        overflow-x: auto;
+        padding: 11px 0 2px;
+        scrollbar-width: thin;
+      }
+
+      .session-bar[hidden] {
+        display: none;
+      }
+
+      .session-tab {
+        min-height: 32px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        flex: 0 0 auto;
+        max-width: 100%;
+        padding: 5px 9px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface-soft);
+        box-shadow: none;
+        opacity: 0.76;
+      }
+
+      .session-tab::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--text-faint);
+      }
+
+      .session-tab:hover:not(.session-tab--active) {
+        opacity: 1;
+      }
+
+      .session-tab--active {
+        opacity: 1;
+        border-color: var(--running);
+        background: var(--running-soft);
+        box-shadow: inset 0 0 0 1px
+          color-mix(in srgb, var(--running) 30%, transparent);
+      }
+
+      .session-tab--running::before {
+        background: var(--running);
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+
+      .session-tab--success::before {
+        background: var(--ok);
+      }
+
+      .session-tab--error::before,
+      .session-tab--stale::before {
+        background: var(--err);
+      }
+
+      .session-tab--cancelled::before {
+        background: var(--warn);
+      }
+
       .session-tab--active.session-tab--success {
-        background: #d8f0e3;
-        border-color: #0d8050;
-        box-shadow:
-          0 0 0 1px #0d8050,
-          0 3px 10px rgba(13, 128, 80, 0.25);
+        border-color: var(--ok);
+        background: var(--ok-soft);
       }
+
       .session-tab--active.session-tab--error,
       .session-tab--active.session-tab--stale {
-        background: #fde8ea;
-        border-color: #b00020;
-        box-shadow:
-          0 0 0 1px #b00020,
-          0 3px 10px rgba(176, 0, 32, 0.22);
+        border-color: var(--err);
+        background: var(--err-soft);
       }
+
       .session-tab--active.session-tab--cancelled {
-        background: #fff3d6;
-        border-color: #9a6700;
-        box-shadow:
-          0 0 0 1px #9a6700,
-          0 3px 10px rgba(154, 103, 0, 0.22);
+        border-color: var(--warn);
+        background: var(--warn-soft);
       }
-      .session-tab--running:not(.session-tab--active) {
-        border-color: #9ec5e8;
-      }
-      .session-tab--success:not(.session-tab--active) {
-        border-color: #9fd4b8;
-      }
-      .session-tab--error:not(.session-tab--active),
-      .session-tab--stale:not(.session-tab--active) {
-        border-color: #e8a0a8;
-      }
-      .session-tab--cancelled:not(.session-tab--active) {
-        border-color: #e0c878;
-      }
+
       .session-tab-label {
-        font-weight: 600;
-        font-family: ui-monospace, monospace;
-      }
-      .session-tab--active .session-tab-label {
-        font-weight: 800;
-      }
-      .session-tab-badge {
-        color: #666;
+        font-family: var(--mono);
         font-size: 11px;
+        font-weight: 750;
       }
-      .session-tab--active .session-tab-badge {
-        color: #333;
+
+      .session-tab-badge {
+        color: var(--text-faint);
+        font-size: 10px;
         font-weight: 600;
       }
+
       .session-tab-close {
-        margin-left: 2px;
-        padding: 0 4px;
+        margin-left: 1px;
+        padding: 0 2px;
         cursor: pointer;
-        opacity: 0.55;
         font-size: 14px;
         line-height: 1;
+        opacity: 0.5;
       }
+
       .session-tab-close:hover {
         opacity: 1;
       }
-      @media (prefers-color-scheme: dark) {
-        .session-bar {
-          border-color: #444;
-        }
-        .session-tab {
-          background: #2a2a2a;
-          border-color: transparent;
-        }
-        .session-tab:hover:not(.session-tab--active) {
-          background: #353535;
-        }
-        .session-tab--active {
-          background: #1a3a5c;
-          border-color: #4da3ff;
-          box-shadow:
-            0 0 0 1px #4da3ff,
-            0 3px 12px rgba(77, 163, 255, 0.35);
-        }
-        .session-tab--active.session-tab--success {
-          background: #1a3d2e;
-          border-color: #3ecf8e;
-          box-shadow:
-            0 0 0 1px #3ecf8e,
-            0 3px 12px rgba(62, 207, 142, 0.3);
-        }
-        .session-tab--active.session-tab--error,
-        .session-tab--active.session-tab--stale {
-          background: #3d1a1f;
-          border-color: #ff6b7a;
-        }
-        .session-tab--active.session-tab--cancelled {
-          background: #3d341a;
-          border-color: #e6b422;
-        }
-        .session-tab-badge {
-          color: #aaa;
-        }
-        .session-tab--active .session-tab-badge {
-          color: #eee;
-        }
+
+      #logPanel {
+        min-height: 0;
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        padding: 12px 14px 0;
       }
 
-      /* Plan confirmation dialog */
+      .console-head {
+        min-height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 12px;
+        color: #9da3ad;
+        border: 1px solid var(--console-border);
+        border-bottom: 0;
+        border-radius: 9px 9px 0 0;
+        background: #202329;
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      .console-lights {
+        display: flex;
+        gap: 5px;
+      }
+
+      .console-lights i {
+        width: 6px;
+        height: 6px;
+        display: block;
+        border-radius: 50%;
+        background: #4d535e;
+      }
+
+      .console-lights i:first-child {
+        background: var(--accent);
+      }
+
+      #log {
+        min-height: 420px;
+        flex: 1;
+        height: calc(100vh - 420px);
+        max-height: 760px;
+        margin: 0;
+        overflow: auto;
+        padding: 16px;
+        color: var(--console-text);
+        border: 1px solid var(--console-border);
+        border-radius: 0 0 9px 9px;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          var(--console);
+        background-size: 100% 24px;
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        scrollbar-color: #4d535e var(--console);
+      }
+
+      #log:empty::before {
+        content: "$ awaiting promote session…";
+        color: #707782;
+      }
+
+      #buildImageBlock {
+        display: none;
+        margin: 12px 14px 0;
+        padding: 13px;
+        border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--border));
+        border-radius: 9px;
+        background: var(--ok-soft);
+      }
+
+      #buildImageBlock.visible {
+        display: block;
+      }
+
+      #buildImageBlock label {
+        margin: 0;
+        color: var(--ok);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      #buildImage {
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+
+      .build-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 9px;
+      }
+
       #planDialog {
-        border: 1px solid #ccc;
-        border-radius: 10px;
+        width: min(610px, calc(100% - 32px));
+        max-height: calc(100vh - 40px);
+        overflow: auto;
         padding: 0;
-        max-width: 560px;
-        width: calc(100% - 32px);
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: 15px;
+        background: var(--surface);
+        box-shadow: 0 24px 80px rgba(13, 16, 21, 0.34);
       }
+
       #planDialog::backdrop {
-        background: rgba(0, 0, 0, 0.45);
+        background: rgba(18, 21, 27, 0.64);
+        backdrop-filter: blur(4px);
       }
+
       #planDialog .plan-body {
-        padding: 18px 20px 8px;
+        padding: 23px 24px 8px;
       }
+
       #planDialog h2 {
-        margin: 0 0 6px;
-        font-size: 1.15rem;
+        margin: 0 0 7px;
+        font-size: 20px;
+        letter-spacing: -0.025em;
       }
+
       #planDialog .plan-meta {
-        margin: 0 0 14px;
-        color: #555;
-        font-size: 0.92rem;
+        margin: 0 0 16px;
+        color: var(--text-soft);
+        font-size: 12px;
       }
-      #planDialog .plan-meta code {
-        font-size: 0.88em;
-      }
+
       #planDialog .plan-flags {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
       }
+
       #planDialog .plan-flag {
-        font-size: 11px;
-        padding: 2px 8px;
+        padding: 3px 8px;
+        color: var(--text-soft);
+        border: 1px solid var(--border);
         border-radius: 999px;
-        background: #eee;
-        color: #444;
+        background: var(--surface-soft);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
       }
+
       #planDialog .plan-flag--warn {
-        background: #fff3d6;
-        color: #9a6700;
+        color: var(--warn);
+        border-color: color-mix(in srgb, var(--warn) 28%, var(--border));
+        background: var(--warn-soft);
       }
+
       #planSteps {
-        list-style: none;
-        margin: 0;
-        padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
+
       #planSteps li {
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 10px 12px;
-        background: #fafafa;
+        position: relative;
+        padding: 12px 14px 12px 42px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--surface-soft);
       }
+
+      #planSteps li::before {
+        content: "";
+        width: 9px;
+        height: 9px;
+        position: absolute;
+        top: 17px;
+        left: 17px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        background: var(--surface-soft);
+      }
+
+      #planSteps li:not(:last-child)::after {
+        content: "";
+        width: 1px;
+        height: 17px;
+        position: absolute;
+        left: 21px;
+        bottom: -13px;
+        z-index: 1;
+        background: var(--border-strong);
+      }
+
       #planSteps .step-kind {
-        font-size: 11px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #666;
-        font-weight: 700;
       }
+
       #planSteps .step-title {
-        font-weight: 700;
         margin-top: 2px;
+        font-size: 13px;
+        font-weight: 750;
       }
+
       #planSteps .step-flow {
-        margin-top: 4px;
-        font-family: ui-monospace, monospace;
-        font-size: 12.5px;
+        margin-top: 5px;
+        font-family: var(--mono);
+        font-size: 11px;
       }
+
       #planSteps .step-flow .arrow {
-        color: #888;
-        margin: 0 6px;
+        margin: 0 7px;
+        color: var(--accent);
       }
-      #planSteps .step-note {
-        margin-top: 4px;
-        font-size: 0.88rem;
-        color: #666;
-      }
+
+      #planSteps .step-note,
       #planSteps .step-mr-title {
-        margin-top: 2px;
-        font-size: 0.9rem;
-        color: #333;
+        margin-top: 4px;
+        color: var(--text-soft);
+        font-size: 11px;
       }
+
       #planDialog .plan-actions {
         display: flex;
         justify-content: flex-end;
-        gap: 10px;
-        padding: 12px 20px 18px;
-        border-top: 1px solid #eee;
-        margin-top: 14px;
+        gap: 9px;
+        margin-top: 16px;
+        padding: 14px 24px 20px;
+        border-top: 1px solid var(--border);
       }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0
+            color-mix(in srgb, var(--running) 40%, transparent);
+        }
+        50% {
+          box-shadow: 0 0 0 4px transparent;
+        }
+      }
+
       @media (prefers-color-scheme: dark) {
-        #planDialog {
-          background: #1e1e1e;
-          border-color: #444;
-          color: #eee;
+        :root {
+          --bg: #111318;
+          --bg-grid: rgba(255, 255, 255, 0.025);
+          --surface: #1a1d23;
+          --surface-raised: #20242b;
+          --surface-soft: #171a20;
+          --surface-inset: #252930;
+          --text: #eceef2;
+          --text-soft: #a6acb7;
+          --text-faint: #757d89;
+          --border: #2d323b;
+          --border-strong: #414751;
+          --accent: #ff7a38;
+          --accent-dark: #ff945f;
+          --accent-soft: #332218;
+          --focus: #75a2ff;
+          --ok: #4ac696;
+          --ok-soft: #192c26;
+          --warn: #edb45b;
+          --warn-soft: #332a1a;
+          --err: #ff7185;
+          --err-soft: #342026;
+          --running: #76a5ff;
+          --running-soft: #1d293d;
+          --shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+          --shadow-small: 0 5px 16px rgba(0, 0, 0, 0.2);
         }
-        #planDialog .plan-meta {
-          color: #aaa;
+      }
+
+      @media (max-width: 1040px) {
+        .intro {
+          grid-template-columns: 1fr;
+          gap: 28px;
         }
-        #planDialog .plan-flag {
-          background: #333;
-          color: #ccc;
+
+        .workspace {
+          grid-template-columns: 1fr;
         }
-        #planDialog .plan-flag--warn {
-          background: #3d341a;
-          color: #e6b422;
+
+        .activity-panel {
+          min-height: 560px;
         }
-        #planSteps li {
-          background: #252525;
-          border-color: #444;
+
+        #log {
+          height: 480px;
         }
-        #planSteps .step-kind {
-          color: #999;
+      }
+
+      @media (max-width: 680px) {
+        .app-shell {
+          padding: 0 12px 20px;
         }
-        #planSteps .step-mr-title {
-          color: #ddd;
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 10px;
+          padding: 14px 0;
         }
-        #planSteps .step-note {
-          color: #aaa;
+
+        .nav {
+          width: 100%;
         }
-        #planDialog .plan-actions {
-          border-color: #333;
+
+        .nav a {
+          padding-left: 0;
+        }
+
+        .intro {
+          padding: 30px 2px 24px;
+        }
+
+        h1 {
+          font-size: 31px;
+        }
+
+        .pipeline-map {
+          grid-template-columns: 1fr;
+          gap: 7px;
+        }
+
+        .pipeline-link {
+          width: 1px;
+          height: 13px;
+          margin-left: 24px;
+        }
+
+        .pipeline-link::after {
+          top: auto;
+          right: -2px;
+          bottom: 0;
+          transform: rotate(135deg);
+        }
+
+        .panel-head,
+        .form-body {
+          padding-right: 14px;
+          padding-left: 14px;
+        }
+
+        .accordion .row {
+          grid-template-columns: 1fr;
+        }
+
+        .activity-meta,
+        #logPanel {
+          padding-right: 9px;
+          padding-left: 9px;
+        }
+
+        #buildImageBlock {
+          margin-right: 9px;
+          margin-left: 9px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
         }
       }
     </style>
+    <link rel="stylesheet" href="theme.css" />
+    <script src="theme.js"></script>
   </head>
   <body>
-    <nav class="nav">
-      <a href="#" id="openOptions">Настройки (URL и токен)</a>
-      <a href="popup.html" id="openPopup">Попап расширения</a>
-    </nav>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="GitLab Promote Control">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Promote Control</span>
+          <span class="brand-product">GitLab CI</span>
+        </div>
+        <nav class="nav" aria-label="Навигация расширения">
+          <a href="#" id="openOptions">Настройки</a>
+          <a href="popup.html" id="openPopup">Попап расширения</a>
+        </nav>
+      </header>
 
-    <div class="main-fields">
-      <h1>Promote MR → develop → master/main</h1>
-      <p class="lead">
-        Merge feature в develop, сборка develop, promote в production, build-образ. Перед запуском —
-        анализ MR и подтверждение цепочки merge. Токен и хост — в настройках
-        (<code>api</code>). Несколько MR можно запускать параллельно — у каждого своя вкладка-сессия.
-        Процессы идут в фоне; страницу можно обновить. История — во вкладках сессий (клик по вкладке).
-      </p>
-
-      <label>
-        Merge request
-        <input
-          type="text"
-          id="mrArg"
-          placeholder="https://git…/group/repo/-/merge_requests/42 или group/repo!42"
-          autocomplete="off"
-        />
-      </label>
-
-      <label>
-        Ещё MR в ту же develop-ветку (опционально)
-        <textarea
-          id="mrBatch"
-          placeholder="По одному на строку — сольются по порядку перед promote&#10;group/repo!43&#10;group/repo!44"
-        ></textarea>
-        <span class="hint"
-          >Все MR — один проект и одна target-ветка (develop). При конфликте — уведомление и
-          остановка.</span
-        >
-      </label>
-
-      <details class="accordion" id="extraOptions">
-        <summary>Дополнительные опции</summary>
-
-        <label>
-          Production-ветка (опционально)
-          <input type="text" id="productionBranch" placeholder="master, master-bus, hmao/main…" />
-          <span class="hint">Пусто — авто: develop→master, develop-bus→master-bus и т.п.</span>
-        </label>
-
-        <div class="row">
-          <label><input type="checkbox" id="dryRun" /> Dry run (без merge API)</label>
-          <label><input type="checkbox" id="waitFeaturePipeline" /> Ждать pipeline feature MR</label>
-          <label><input type="checkbox" id="stopAfterFeature" /> Только feature → develop</label>
-          <label><input type="checkbox" id="stopAfterPromoteMr" /> Остановиться после создания promote MR</label>
-          <label><input type="checkbox" id="skipBuildImage" /> Не ждать build / образ</label>
+      <section class="intro">
+        <div>
+          <div class="eyebrow">Deployment workspace</div>
+          <h1>Проведите MR до production</h1>
+          <p class="lead">
+            Анализ цепочки, последовательный merge и контроль сборки в одном
+            месте. Процессы продолжаются в фоне, а параллельные запуски
+            сохраняются как отдельные сессии.
+          </p>
         </div>
 
-        <label>
-          Стадия CI для образа
-          <input type="text" id="buildStage" value="build" />
-        </label>
-
-        <div class="row">
-          <label>
-            Таймаут pipeline (с)
-            <input type="number" id="pipelineTimeout" min="60" max="86400" value="7200" />
-            <span class="hint">По умолчанию 2 ч — хватает на сборки 30+ мин</span>
-          </label>
-          <label>
-            Интервал опроса (с)
-            <input type="number" id="pollInterval" min="5" max="120" value="20" />
-          </label>
+        <div class="pipeline-map" aria-label="Цепочка promote">
+          <div class="pipeline-stage">
+            <span class="stage-index">01 / SOURCE</span>
+            <span class="stage-name">feature</span>
+            <span class="stage-caption">merge request</span>
+          </div>
+          <span class="pipeline-link" aria-hidden="true"></span>
+          <div class="pipeline-stage">
+            <span class="stage-index">02 / VERIFY</span>
+            <span class="stage-name">develop</span>
+            <span class="stage-caption">pipeline &amp; checks</span>
+          </div>
+          <span class="pipeline-link" aria-hidden="true"></span>
+          <div class="pipeline-stage pipeline-stage--accent">
+            <span class="stage-index">03 / RELEASE</span>
+            <span class="stage-name">production</span>
+            <span class="stage-caption">build image</span>
+          </div>
         </div>
-      </details>
+      </section>
 
-      <div class="actions">
-        <button type="button" id="run" class="primary">Запустить</button>
-        <button type="button" id="cancel" disabled>Отменить</button>
-      </div>
+      <main class="workspace">
+        <section class="panel control-panel">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Input</span>
+              <h2 class="panel-title">Новый запуск</h2>
+            </div>
+            <span class="panel-state">API ready</span>
+          </header>
 
-      <p id="statusLine"></p>
+          <div class="form-body">
+            <label>
+              Merge request
+              <span class="field-tag">required</span>
+              <input
+                type="text"
+                id="mrArg"
+                placeholder="group/repo!42 или ссылка на MR"
+                autocomplete="off"
+              />
+            </label>
 
-      <div id="sessionBar" class="session-bar" hidden aria-label="Сессии promote"></div>
-    </div>
+            <label>
+              Очередь дополнительных MR
+              <span class="field-tag">optional</span>
+              <textarea
+                id="mrBatch"
+                placeholder="По одному MR на строку&#10;group/repo!43&#10;group/repo!44"
+              ></textarea>
+              <span class="hint">
+                Один проект и одна staging-ветка (по маскам из настроек). MR
+                будут объединены последовательно.
+              </span>
+            </label>
 
-    <div id="logPanel">
-      <pre id="log" aria-live="polite"></pre>
-    </div>
+            <details class="accordion" id="extraOptions">
+              <summary>Параметры выполнения</summary>
+              <div class="accordion-content">
+                <label>
+                  Production-ветка
+                  <span class="field-tag">auto</span>
+                  <input
+                    type="text"
+                    id="productionBranch"
+                    placeholder="master, master-env, team/main…"
+                  />
+                  <span class="hint"
+                    >Пусто — по маскам из настроек (staging → production). Можно
+                    указать полное имя или короткий суффикс вроде
+                    <code>master</code>.</span
+                  >
+                </label>
 
-    <div id="buildImageBlock">
-      <label>
-        Build image
-        <input type="text" id="buildImage" readonly />
-      </label>
-      <div class="build-actions">
-        <button type="button" id="copyImage">Копировать образ</button>
-        <button type="button" id="newMr" class="primary" hidden>Новый MR</button>
-      </div>
+                <div class="row">
+                  <label
+                    ><input type="checkbox" id="dryRun" /> Dry run без merge
+                    API</label
+                  >
+                  <label
+                    ><input type="checkbox" id="waitFeaturePipeline" /> Ждать
+                    pipeline feature MR</label
+                  >
+                  <label
+                    ><input type="checkbox" id="stopAfterFeature" /> Только
+                    feature → staging</label
+                  >
+                  <label
+                    ><input type="checkbox" id="stopAfterPromoteMr" /> Стоп
+                    после promote MR</label
+                  >
+                  <label
+                    ><input type="checkbox" id="skipBuildImage" /> Не ждать
+                    build / образ</label
+                  >
+                </div>
+
+                <label>
+                  Стадия CI для образа
+                  <input type="text" id="buildStage" value="build" />
+                </label>
+
+                <div class="row">
+                  <label>
+                    Таймаут pipeline (с)
+                    <input
+                      type="number"
+                      id="pipelineTimeout"
+                      min="60"
+                      max="86400"
+                      value="7200"
+                    />
+                    <span class="hint">По умолчанию 2 часа</span>
+                  </label>
+                  <label>
+                    Интервал опроса (с)
+                    <input
+                      type="number"
+                      id="pollInterval"
+                      min="5"
+                      max="120"
+                      value="20"
+                    />
+                  </label>
+                </div>
+              </div>
+            </details>
+
+            <div class="actions">
+              <button type="button" id="run" class="primary">
+                Запустить promote
+              </button>
+              <button type="button" id="cancel" disabled>Отменить</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel activity-panel">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Runtime</span>
+              <h2 class="panel-title">Активность</h2>
+            </div>
+            <span class="panel-state">Worker online</span>
+          </header>
+
+          <div class="activity-meta">
+            <p id="statusLine" aria-live="polite"></p>
+            <div
+              id="sessionBar"
+              class="session-bar"
+              hidden
+              aria-label="Сессии promote"
+            ></div>
+          </div>
+
+          <div id="logPanel">
+            <div class="console-head">
+              <span>Promote output</span>
+              <span class="console-lights" aria-hidden="true"
+                ><i></i><i></i><i></i
+              ></span>
+            </div>
+            <pre id="log" aria-live="polite"></pre>
+          </div>
+
+          <div id="buildImageBlock">
+            <label>
+              Build image
+              <input type="text" id="buildImage" readonly />
+            </label>
+            <div class="build-actions">
+              <button type="button" id="copyImage">Копировать образ</button>
+              <button type="button" id="newMr" class="primary" hidden>
+                Новый MR
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
 
     <dialog id="planDialog" aria-labelledby="planDialogTitle">
@@ -577,7 +1318,9 @@
       </div>
       <div class="plan-actions">
         <button type="button" id="planCancel">Отмена</button>
-        <button type="button" id="planConfirm" class="primary">Подтвердить и запустить</button>
+        <button type="button" id="planConfirm" class="primary">
+          Подтвердить и запустить
+        </button>
       </div>
     </dialog>
 

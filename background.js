@@ -6,6 +6,7 @@ import {
   listPipelineJobs,
 } from "./gitlab-api.js";
 import { deliverCiNotification } from "./ci-notify.js";
+import { DEFAULT_BRANCH_MAPPINGS } from "./gitlab-promote.js";
 import {
   acceptPromoteStart,
   cancelPromoteRun,
@@ -453,12 +454,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const settings = await chrome.storage.local.get({
           gitlabBaseUrl: "https://git-02.t1-group.ru",
           privateToken: "",
+          promoteBranchMappings: DEFAULT_BRANCH_MAPPINGS,
         });
         if (!settings.privateToken) {
           sendResponse({ ok: false, error: "Нет токена в настройках" });
           return;
         }
-        const plan = await previewPromotePlan(msg.form, {
+        const form = {
+          ...msg.form,
+          branchMappings: settings.promoteBranchMappings,
+        };
+        const plan = await previewPromotePlan(form, {
           gitlabBaseUrl: settings.gitlabBaseUrl,
           privateToken: settings.privateToken,
         });
@@ -476,12 +482,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const settings = await chrome.storage.local.get({
           gitlabBaseUrl: "https://git-02.t1-group.ru",
           privateToken: "",
+          promoteBranchMappings: DEFAULT_BRANCH_MAPPINGS,
         });
         if (!settings.privateToken) {
           sendResponse({ ok: false, error: "Нет токена в настройках" });
           return;
         }
-        const result = await acceptPromoteStart(msg.form, {
+        const form = {
+          ...msg.form,
+          branchMappings: settings.promoteBranchMappings,
+        };
+        const result = await acceptPromoteStart(form, {
           gitlabBaseUrl: settings.gitlabBaseUrl,
           privateToken: settings.privateToken,
         });

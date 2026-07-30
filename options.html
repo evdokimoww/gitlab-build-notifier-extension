@@ -1,122 +1,904 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
     <title>GitLab build notifier — настройки</title>
     <style>
-      body {
-        font-family: system-ui, sans-serif;
-        max-width: 640px;
-        margin: 24px auto;
-        padding: 0 16px;
-        line-height: 1.5;
+      :root {
+        color-scheme: light dark;
+        --bg: #eef0f3;
+        --bg-grid: rgba(38, 45, 56, 0.045);
+        --surface: #ffffff;
+        --surface-soft: #f5f6f8;
+        --surface-inset: #e9ebef;
+        --text: #17191d;
+        --text-soft: #5e6470;
+        --text-faint: #858b96;
+        --border: #d9dce2;
+        --border-strong: #c5c9d1;
+        --accent: #fc6d26;
+        --accent-dark: #c94d0b;
+        --accent-soft: #fff0e8;
+        --focus: #3f73d8;
+        --ok: #16805c;
+        --ok-soft: #e5f5ee;
+        --err: #c33149;
+        --err-soft: #fde9ed;
+        --shadow: 0 18px 42px rgba(28, 33, 41, 0.08);
+        --sans: "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
       }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        color: var(--text);
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(var(--bg-grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+        background-size: 32px 32px;
+        font-family: var(--sans);
+        line-height: 1.45;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      a,
+      input,
+      textarea {
+        outline: none;
+      }
+
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent);
+      }
+
+      .app-shell {
+        width: min(1080px, 100%);
+        margin: 0 auto;
+        padding: 0 28px 40px;
+      }
+
+      .topbar {
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+
+      .brand-mark {
+        width: 31px;
+        height: 31px;
+        position: relative;
+        flex: 0 0 auto;
+        border-radius: 9px;
+        background: linear-gradient(145deg, #ff8a49, var(--accent));
+        box-shadow: 0 6px 16px rgba(252, 109, 38, 0.28);
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        content: "";
+        position: absolute;
+        background: #fff;
+      }
+
+      .brand-mark::before {
+        width: 12px;
+        height: 3px;
+        left: 9px;
+        top: 14px;
+        border-radius: 999px;
+      }
+
+      .brand-mark::after {
+        width: 6px;
+        height: 6px;
+        left: 12px;
+        top: 12px;
+        border: 2px solid #fff;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      .brand-name {
+        font-weight: 750;
+        letter-spacing: -0.02em;
+      }
+
+      .brand-product {
+        color: var(--text-faint);
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .theme-switch {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        padding: 5px 7px;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface-soft);
+      }
+
+      .theme-switch input {
+        width: 0;
+        height: 0;
+        position: absolute;
+        opacity: 0;
+      }
+
+      .theme-icon {
+        width: 13px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+      }
+
+      .theme-track {
+        width: 29px;
+        height: 16px;
+        position: relative;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: var(--surface-inset);
+        transition:
+          border-color 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .theme-track::after {
+        content: "";
+        width: 10px;
+        height: 10px;
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        border-radius: 50%;
+        background: var(--text-faint);
+        transition:
+          left 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .theme-switch input:checked + .theme-track {
+        border-color: var(--accent-dark);
+        background: var(--accent);
+      }
+
+      .theme-switch input:checked + .theme-track::after {
+        left: 15px;
+        background: #fff;
+      }
+
+      .theme-switch:has(input:focus-visible) {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent);
+      }
+
+      .promote-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 11px;
+        color: var(--text-soft);
+        border-radius: 7px;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        transition:
+          color 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .promote-link::after {
+        content: "→";
+        color: var(--accent);
+        font-family: var(--mono);
+      }
+
+      .promote-link:hover {
+        color: var(--text);
+        background: var(--surface-inset);
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) minmax(300px, 0.7fr);
+        gap: 48px;
+        align-items: end;
+        padding: 42px 4px 30px;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 10px;
+        color: var(--accent-dark);
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 44px);
+        font-weight: 720;
+        letter-spacing: -0.045em;
+        line-height: 1.04;
+      }
+
+      .intro-copy {
+        margin: 0;
+        color: var(--text-soft);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      code {
+        color: var(--accent-dark);
+        font-family: var(--mono);
+        font-size: 0.9em;
+      }
+
+      .settings-layout {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .panel {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .panel--wide {
+        grid-column: 1 / -1;
+      }
+
+      .panel-head {
+        min-height: 66px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface-soft);
+      }
+
+      .panel-kicker {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .panel-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 750;
+        letter-spacing: -0.015em;
+      }
+
+      .panel-badge {
+        padding: 4px 7px;
+        color: var(--text-faint);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-family: var(--mono);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .panel-body {
+        padding: 4px 20px 21px;
+      }
+
       label {
         display: block;
-        margin-top: 16px;
-        font-weight: 600;
+        margin-top: 17px;
+        font-size: 13px;
+        font-weight: 700;
       }
+
+      .field-tag {
+        margin-left: 5px;
+        color: var(--text-faint);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
       input[type="text"],
       input[type="password"],
-      input[type="number"] {
-        width: 100%;
-        box-sizing: border-box;
-        margin-top: 6px;
-        padding: 8px;
-      }
+      input[type="number"],
       textarea {
         width: 100%;
-        box-sizing: border-box;
-        margin-top: 6px;
-        min-height: 72px;
-        padding: 8px;
-        font-family: inherit;
+        margin-top: 7px;
+        padding: 10px 12px;
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--surface);
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
       }
+
+      input[type="text"]:hover,
+      input[type="password"]:hover,
+      input[type="number"]:hover,
+      textarea:hover {
+        border-color: var(--text-faint);
+      }
+
+      input[type="text"]:focus,
+      input[type="password"]:focus,
+      input[type="number"]:focus,
+      textarea:focus {
+        border-color: var(--focus);
+      }
+
+      input[type="password"],
+      textarea {
+        font-family: var(--mono);
+        font-size: 11.5px;
+      }
+
+      textarea {
+        min-height: 92px;
+        resize: vertical;
+        line-height: 1.55;
+      }
+
+      #promoteBranchMappings {
+        min-height: 180px;
+        font-size: 11.5px;
+      }
+
       .hint {
-        color: #555;
-        font-size: 0.9rem;
-        font-weight: normal;
-        margin-top: 4px;
+        display: block;
+        margin-top: 5px;
+        color: var(--text-faint);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.45;
       }
-      button {
-        margin-top: 20px;
-        padding: 10px 18px;
-        cursor: pointer;
-      }
-      #status {
+
+      .security-note {
+        display: flex;
+        gap: 9px;
         margin-top: 12px;
-        min-height: 1.5em;
+        padding: 10px 11px;
+        color: var(--text-soft);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        font-size: 10.5px;
+        line-height: 1.45;
       }
-      .ok {
-        color: #0d8050;
+
+      .security-note::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        margin-top: 4px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 0 3px var(--ok-soft);
       }
-      .err {
-        color: #b00020;
+
+      .toggle-list {
+        display: grid;
+        gap: 8px;
+        padding-top: 16px;
+      }
+
+      .toggle {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        margin: 0;
+        padding: 11px;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--surface-soft);
+        transition:
+          border-color 0.15s ease,
+          background 0.15s ease;
+      }
+
+      .toggle:hover {
+        border-color: var(--border-strong);
+        background: var(--surface-inset);
+      }
+
+      .toggle input {
+        width: 30px;
+        height: 17px;
+        position: relative;
+        margin: 1px 0 0;
+        cursor: pointer;
+        appearance: none;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: var(--surface-inset);
+        transition:
+          border-color 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .toggle input::after {
+        content: "";
+        width: 11px;
+        height: 11px;
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        border-radius: 50%;
+        background: var(--text-faint);
+        transition:
+          left 0.16s ease,
+          background 0.16s ease;
+      }
+
+      .toggle input:checked {
+        border-color: var(--accent-dark);
+        background: var(--accent);
+      }
+
+      .toggle input:checked::after {
+        left: 15px;
+        background: #fff;
+      }
+
+      .toggle-title {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .toggle-copy {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-faint);
+        font-size: 10.5px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .action-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 18px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--surface) 92%, transparent);
+        box-shadow: var(--shadow);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      button {
+        min-height: 38px;
+        padding: 8px 15px;
+        color: var(--text);
+        cursor: pointer;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--surface);
+        font-size: 12px;
+        font-weight: 700;
+        transition:
+          transform 0.15s ease,
+          border-color 0.15s ease,
+          background 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+
+      button:hover {
+        border-color: var(--text-faint);
+        background: var(--surface-soft);
+        transform: translateY(-1px);
+      }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      button.primary {
+        color: #fff;
+        border-color: var(--accent-dark);
+        background: linear-gradient(180deg, #ff7f3f, var(--accent));
+        box-shadow: 0 5px 13px rgba(252, 109, 38, 0.22);
+      }
+
+      button.primary:hover {
+        border-color: var(--accent-dark);
+        background: linear-gradient(180deg, #ff8a50, #f36018);
+        box-shadow: 0 7px 17px rgba(252, 109, 38, 0.3);
+      }
+
+      #status {
+        min-height: 18px;
+        flex: 1;
+        margin: 0;
+        color: var(--text-faint);
+        font-size: 11px;
+        font-weight: 650;
+        text-align: right;
+      }
+
+      #status.ok {
+        color: var(--ok);
+      }
+
+      #status.err {
+        color: var(--err);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111318;
+          --bg-grid: rgba(255, 255, 255, 0.025);
+          --surface: #1a1d23;
+          --surface-soft: #171a20;
+          --surface-inset: #252930;
+          --text: #eceef2;
+          --text-soft: #a6acb7;
+          --text-faint: #757d89;
+          --border: #2d323b;
+          --border-strong: #414751;
+          --accent: #ff7a38;
+          --accent-dark: #ff945f;
+          --accent-soft: #332218;
+          --focus: #75a2ff;
+          --ok: #4ac696;
+          --ok-soft: #192c26;
+          --err: #ff7185;
+          --err-soft: #342026;
+          --shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app-shell {
+          padding: 0 12px 24px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 8px;
+          padding: 14px 0;
+        }
+
+        .promote-link {
+          padding-left: 0;
+        }
+
+        .topbar-actions {
+          width: 100%;
+          justify-content: space-between;
+        }
+
+        .intro {
+          grid-template-columns: 1fr;
+          gap: 16px;
+          padding: 30px 2px 24px;
+        }
+
+        .settings-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .panel--wide {
+          grid-column: auto;
+        }
+
+        .action-bar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        #status {
+          text-align: left;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
+    <link rel="stylesheet" href="theme.css" />
+    <script src="theme.js"></script>
   </head>
   <body>
-    <h1>GitLab — уведомления о stage</h1>
-    <p>
-      Укажите URL инстанса и токен. Для уведомлений достаточно <code>read_api</code>; для
-      <a href="promote.html" id="promoteLink">promote MR</a> нужен scope <code>api</code> (merge).
-      Откройте вкладки с MR или пайплайном на этом хосте.
-    </p>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="GitLab Build Notifier">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Build Notifier</span>
+          <span class="brand-product">GitLab CI</span>
+        </div>
+        <div class="topbar-actions">
+          <label
+            class="theme-switch"
+            title="Переключить светлую или тёмную тему"
+          >
+            <span class="theme-icon" aria-hidden="true">☼</span>
+            <input type="checkbox" id="themeToggle" aria-label="Тёмная тема" />
+            <span class="theme-track" aria-hidden="true"></span>
+            <span class="theme-icon" aria-hidden="true">☾</span>
+          </label>
+          <a href="promote.html" id="promoteLink" class="promote-link"
+            >Promote Control</a
+          >
+        </div>
+      </header>
 
-    <label>
-      Базовый URL GitLab
-      <input type="text" id="gitlabBaseUrl" autocomplete="off" />
-      <span class="hint">Например https://git-02.t1-group.ru</span>
-    </label>
+      <section class="intro">
+        <div>
+          <div class="eyebrow">System configuration</div>
+          <h1>Настройка мониторинга</h1>
+        </div>
+        <p class="intro-copy">
+          Подключите GitLab-инстанс и задайте правила отслеживания stage. Для
+          уведомлений достаточно scope <code>read_api</code>, для merge через
+          Promote Control нужен <code>api</code>. Маски веток настраивают флоу
+          promote: staging → production.
+        </p>
+      </section>
 
-    <label>
-      Personal Access Token
-      <input type="password" id="privateToken" autocomplete="current-password" />
-    </label>
+      <main class="settings-layout">
+        <section class="panel">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Connection</span>
+              <h2 class="panel-title">Доступ к GitLab</h2>
+            </div>
+            <span class="panel-badge">Local storage</span>
+          </header>
+          <div class="panel-body">
+            <label>
+              Базовый URL GitLab
+              <span class="field-tag">required</span>
+              <input type="text" id="gitlabBaseUrl" autocomplete="off" />
+              <span class="hint">Например https://git-02.t1-group.ru</span>
+            </label>
 
-    <label>
-      Имя stage
-      <input type="text" id="stageName" />
-      <span class="hint">По умолчанию: build</span>
-    </label>
+            <label>
+              Personal Access Token
+              <span class="field-tag">secret</span>
+              <input
+                type="password"
+                id="privateToken"
+                autocomplete="current-password"
+              />
+            </label>
 
-    <label>
-      Интервал опроса (секунды)
-      <input type="number" id="pollIntervalSec" min="10" max="600" />
-    </label>
+            <div class="security-note">
+              Токен хранится локально в профиле браузера и используется только
+              для запросов к указанному GitLab.
+            </div>
+          </div>
+        </section>
 
-    <label>
-      <input type="checkbox" id="treatSkippedAsSuccess" />
-      Считать skipped успехом для stage
-    </label>
+        <section class="panel">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Polling</span>
+              <h2 class="panel-title">Контроль stage</h2>
+            </div>
+            <span class="panel-badge">10–600 sec</span>
+          </header>
+          <div class="panel-body">
+            <label>
+              Имя stage
+              <input type="text" id="stageName" />
+              <span class="hint">По умолчанию: build</span>
+            </label>
 
-    <label>
-      <input type="checkbox" id="treatCanceledAsFailure" />
-      Считать canceled ошибкой
-    </label>
+            <label>
+              Интервал опроса
+              <span class="field-tag">seconds</span>
+              <input type="number" id="pollIntervalSec" min="10" max="600" />
+              <span class="hint"
+                >Как часто проверять открытые MR и pipeline.</span
+              >
+            </label>
 
-    <label>
-      <input type="checkbox" id="enableFaviconTint" />
-      Менять иконку вкладки (favicon) на статусную иконку
-      <span class="hint">В Chrome нельзя красить саму пипку вкладки; иконка сайта во вкладке — самый заметный способ выделить страницу.</span>
-    </label>
+            <label>
+              Whitelist проектов
+              <span class="field-tag">optional</span>
+              <textarea
+                id="projectWhitelist"
+                placeholder="frontend/fe-portal"
+              ></textarea>
+              <span class="hint"
+                >Один префикс пути GitLab на строку. Пусто — отслеживать
+                все.</span
+              >
+            </label>
+          </div>
+        </section>
 
-    <label>
-      <input type="checkbox" id="enableNotificationSound" />
-      Звуковой сигнал вместе с уведомлением
-      <span class="hint">Короткий сигнал из расширения (через фоновую страницу offscreen). В офисе можно отключить.</span>
-    </label>
+        <section class="panel panel--wide">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Promote</span>
+              <h2 class="panel-title">Сопоставление веток</h2>
+            </div>
+            <span class="panel-badge">Masks</span>
+          </header>
+          <div class="panel-body">
+            <label>
+              Правила staging → production
+              <span class="field-tag">masks</span>
+              <textarea
+                id="promoteBranchMappings"
+                rows="10"
+                spellcheck="false"
+                placeholder="develop → master, main"
+              ></textarea>
+              <span class="hint">
+                Одна маска на строку: <code>staging → production[, …]</code>.
+                Символ <code>*</code> — один сегмент пути (без
+                <code>/</code>). Первое совпадение используется. Строки с
+                <code>#</code> — комментарии. Пустое поле вернёт стандартные
+                правила при сохранении.
+              </span>
+            </label>
+            <div class="security-note">
+              Стандартный флоу: feature → <code>develop</code> →
+              <code>master</code>/<code>main</code>. Частные случаи вроде
+              <code>*/develop</code> или <code>develop-*</code> задаются
+              отдельными масками.
+            </div>
+          </div>
+        </section>
 
-    <label>
-      Whitelist путей проекта (по строке на строку, пусто = все)
-      <textarea id="projectWhitelist" placeholder="frontend/fe-portal"></textarea>
-      <span class="hint">Префикс пути проекта в GitLab, например <code>frontend/fe-portal</code></span>
-    </label>
+        <section class="panel panel--wide">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Behavior</span>
+              <h2 class="panel-title">События и индикация</h2>
+            </div>
+            <span class="panel-badge">Browser feedback</span>
+          </header>
+          <div class="panel-body">
+            <div class="toggle-list">
+              <label class="toggle">
+                <input type="checkbox" id="treatSkippedAsSuccess" />
+                <span>
+                  <span class="toggle-title">Считать skipped успешным</span>
+                  <span class="toggle-copy"
+                    >Не переводить весь stage в ошибку из-за skipped.</span
+                  >
+                </span>
+              </label>
 
-    <button type="button" id="save">Сохранить</button>
-    <button type="button" id="resetNotified">Сбросить «уже уведомлено»</button>
+              <label class="toggle">
+                <input type="checkbox" id="treatCanceledAsFailure" />
+                <span>
+                  <span class="toggle-title">Считать canceled ошибкой</span>
+                  <span class="toggle-copy"
+                    >Показывать отменённые задания как неуспешный stage.</span
+                  >
+                </span>
+              </label>
 
-    <p id="status"></p>
+              <label class="toggle">
+                <input type="checkbox" id="enableFaviconTint" />
+                <span>
+                  <span class="toggle-title">Статусная иконка вкладки</span>
+                  <span class="toggle-copy">
+                    Заменять favicon GitLab на заметную иконку результата.
+                  </span>
+                </span>
+              </label>
+
+              <label class="toggle">
+                <input type="checkbox" id="enableNotificationSound" />
+                <span>
+                  <span class="toggle-title">Звуковой сигнал</span>
+                  <span class="toggle-copy">
+                    Воспроизводить короткий сигнал вместе с системным
+                    уведомлением.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="action-bar">
+        <div class="actions">
+          <button type="button" id="save" class="primary">
+            Сохранить настройки
+          </button>
+          <button type="button" id="resetNotified">
+            Сбросить кэш уведомлений
+          </button>
+        </div>
+        <p id="status" aria-live="polite"></p>
+      </footer>
+    </div>
 
     <script src="options.js" type="module"></script>
   </body>
