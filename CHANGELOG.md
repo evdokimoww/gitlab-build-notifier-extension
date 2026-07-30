@@ -2,6 +2,12 @@
 
 Формат вдохновлён [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/); версии по [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [1.4.4] — 2026-07-28
+
+### Исправлено
+
+- После merge feature → develop обязательно ждём успешный pipeline develop-ветки перед созданием/merge promote MR в production. Без зелёной сборки develop promote не выполняется.
+
 ## [1.4.3] — 2026-06-04
 
 ### Изменено

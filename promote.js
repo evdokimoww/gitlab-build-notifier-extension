@@ -512,6 +512,8 @@ function stepKindLabel(step) {
   switch (step.kind) {
     case "feature":
       return "feature → develop";
+    case "develop-build":
+      return "сборка develop";
     case "promote-create":
       return "promote MR";
     case "promote":

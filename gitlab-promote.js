@@ -1353,7 +1353,7 @@ async function loadAndValidateBatch(apiBase, token, refs, signal) {
 
 /**
  * @typedef {{
- *   kind: 'feature' | 'promote-create' | 'promote' | 'build',
+ *   kind: 'feature' | 'develop-build' | 'promote-create' | 'promote' | 'build',
  *   label: string,
  *   sourceBranch?: string,
  *   targetBranch?: string,
@@ -1452,6 +1452,12 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
   }
 
   if (!stopAfterFeature && productionBranch) {
+    steps.push({
+      kind: "develop-build",
+      label: "Сборка develop",
+      targetBranch: developBranch,
+      note: `Дождаться успешного pipeline на ${developBranch} после merge feature (без этого promote в production не выполняется)`,
+    });
     if (stopAfterPromoteMr) {
       steps.push({
         kind: "promote-create",
@@ -1560,13 +1566,41 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   log(`Production: ${productionBranch}`);
   if (dryRun) log("--- dry run ---");
 
+  /** Baseline develop pipeline до merge feature — ждём новый push-pipeline. */
+  let lastDevelopPipelineBeforeMerge = null;
+  let mergedAnyFeature = false;
+  if (!dryRun) {
+    checkAborted(signal);
+    const developPipelines = await listPipelinesForRef(
+      apiBase,
+      token,
+      project,
+      developBranch,
+      { perPage: 1 }
+    );
+    if (developPipelines.length) {
+      lastDevelopPipelineBeforeMerge = Number(developPipelines[0].id);
+    }
+    log(
+      `  baseline develop pipeline: ${
+        lastDevelopPipelineBeforeMerge != null
+          ? `#${lastDevelopPipelineBeforeMerge}`
+          : "(нет — ждём любой новый)"
+      }`
+    );
+    if (developPipelines.length) {
+      logPipelinesSnapshot(log, developBranch, developPipelines);
+    }
+  }
+
   for (let i = 0; i < mrs.length; i++) {
-    const { ref: mrRef, mr: initialMr } = mrs[i];
+    const { ref: mrRef } = mrs[i];
     const label =
       mrs.length > 1 ? `Feature ${i + 1}/${mrs.length}` : "Feature";
 
     checkAborted(signal);
     let mr = await refreshMergeRequest(apiBase, token, project, mrRef.iid, signal);
+    const wasMerged = String(mr.state) === "merged";
     logMrSnapshot(log, `${label} перед обработкой`, mr);
     throwIfConflict(mr, label, hooks, log);
     ensureMergeable(mr, label, hooks, log);
@@ -1587,6 +1621,9 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
       checkAborted(signal);
       mr = await refreshMergeRequest(apiBase, token, project, mrRef.iid, signal);
     }
+    if (!wasMerged && String(mr.state) === "merged") {
+      mergedAnyFeature = true;
+    }
     if (mr.web_url) log(`${label}: ${mr.web_url}`);
     featureMr = mr;
   }
@@ -1594,6 +1631,35 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   if (options.stopAfterFeature) {
     log("Остановка после merge feature → develop.");
     return {};
+  }
+
+  // До promote в production develop с влитыми изменениями обязан собраться успешно.
+  if (!dryRun) {
+    // Если feature уже были в develop — принимаем текущий success; иначе ждём
+    // pipeline после baseline (push от merge).
+    const afterDevelopId = mergedAnyFeature ? lastDevelopPipelineBeforeMerge : null;
+    log(
+      `Ожидание успешного pipeline на ${JSON.stringify(developBranch)} ` +
+        `перед promote в ${JSON.stringify(productionBranch)}…` +
+        (mergedAnyFeature
+          ? ` (после merge feature, baseline #${lastDevelopPipelineBeforeMerge ?? "—"})`
+          : " (feature уже в develop — проверяем актуальный pipeline)")
+    );
+    const developPipelineId = await waitBranchPipeline(
+      apiBase,
+      token,
+      project,
+      developBranch,
+      afterDevelopId,
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun }
+    );
+    log(
+      `  develop pipeline готов: #${developPipelineId} — можно создавать/мержить promote MR`
+    );
+  } else {
+    log(
+      `Dry run: пропуск ожидания pipeline ${JSON.stringify(developBranch)} перед promote`
+    );
   }
 
   const pipelineCtx = { mrApiUnsupported: false, emptyPipelineOk: true };
