@@ -1337,6 +1337,11 @@ export async function extractBuildImage(
   const jobName = buildJob.name || buildJob.stage;
   log(`Чтение образа из job #${jobId} (${jobName}, stage=${buildJob.stage})`);
 
+  return extractJobBuildImage(apiBase, token, project, jobId, log, signal);
+}
+
+/** Read the build image from artifacts, falling back to the completed job trace. */
+export async function extractJobBuildImage(apiBase, token, project, jobId, log = () => {}, signal) {
   for (const artifactPath of ["images.txt", "build.env"]) {
     checkAborted(signal);
     const content = await getJobArtifact(apiBase, token, project, jobId, artifactPath);

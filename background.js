@@ -6,6 +6,7 @@ import {
   listPipelineJobs,
 } from "./gitlab-api.js";
 import { deliverCiNotification } from "./ci-notify.js";
+import { getBuildImages, showMrBuildImages } from "./mr-build-image.js";
 import { DEFAULT_BRANCH_MAPPINGS } from "./gitlab-promote.js";
 import {
   acceptPromoteStart,
@@ -236,7 +237,6 @@ async function runPoll() {
   const stageName = String(settings.stageName || "build").trim() || "build";
 
   const tabs = await chrome.tabs.query({});
-  /** @type {Map<string, { origin: string, projectPath: string, pipelineId: number, tabIds: number[] }>} */
   const byPipeline = new Map();
 
   for (const tab of tabs) {
@@ -251,35 +251,42 @@ async function runPoll() {
       pipelineId = await resolvePipelineId(parsed, settings);
     } catch (e) {
       console.warn("[gitlab-notifier] resolve pipeline:", e);
+      if (parsed.kind === "mr") await showMrBuildImages([tab], null);
       continue;
     }
-    if (pipelineId == null) continue;
+    if (pipelineId == null) {
+      if (parsed.kind === "mr") await showMrBuildImages([tab], null);
+      continue;
+    }
 
     const k = `${parsed.origin}\n${parsed.projectPath}\n${pipelineId}`;
     const cur = byPipeline.get(k);
     if (cur) {
       cur.tabIds.push(tab.id);
+      if (parsed.kind === "mr") cur.mrTabs.push({ id: tab.id, url: tab.url });
     } else {
       byPipeline.set(k, {
         origin: parsed.origin,
         projectPath: parsed.projectPath,
         pipelineId,
         tabIds: [tab.id],
+        mrTabs: parsed.kind === "mr" ? [{ id: tab.id, url: tab.url }] : [],
       });
     }
   }
 
   const notified = await getNotifiedSet();
 
-  for (const { origin, projectPath, pipelineId, tabIds } of byPipeline.values()) {
+  for (const { origin, projectPath, pipelineId, tabIds, mrTabs } of byPipeline.values()) {
     const nk = notifyKey(origin, projectPath, pipelineId, stageName);
-    if (notified[nk]) continue;
+    if (notified[nk] && !mrTabs.length) continue;
 
     let jobs;
     try {
       jobs = await listPipelineJobs(apiBase, settings.privateToken, projectPath, pipelineId);
     } catch (e) {
       console.warn("[gitlab-notifier] jobs:", e);
+      await showMrBuildImages(mrTabs, null);
       continue;
     }
 
@@ -288,6 +295,19 @@ async function runPoll() {
       (j) => String(j.stage || "").trim().toLowerCase() === stageKey,
     );
     const agg = aggregateStage(inStage, settings);
+
+    if (mrTabs.length) {
+      try {
+        const images = agg.phase === "done" && agg.ok
+          ? await getBuildImages(apiBase, settings.privateToken, projectPath, inStage)
+          : [];
+        await showMrBuildImages(mrTabs, { projectPath, pipelineId, stageName, images });
+      } catch (e) {
+        console.warn("[gitlab-notifier] MR build image:", e);
+        await showMrBuildImages(mrTabs, null);
+      }
+    }
+    if (notified[nk]) continue;
 
     const phaseKeys = tabIds.map((id) => tabPhaseStorageKey(id, nk));
     const prevByKey = await chrome.storage.session.get(phaseKeys);
