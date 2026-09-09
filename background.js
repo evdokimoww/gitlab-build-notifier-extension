@@ -225,7 +225,11 @@ async function resolvePipelineId(parsed, settings) {
   return null;
 }
 
-async function runPoll() {
+async function runPoll(targetTabs, { buildImagesOnly = false, isCurrent = () => true } = {}) {
+  const showImages = (tabs, build) => {
+    const currentTabs = tabs.filter(isCurrent);
+    if (currentTabs.length) return showMrBuildImages(currentTabs, build);
+  };
   const settings = await loadSettings();
   const base = settings.gitlabBaseUrl.replace(/\/$/, "");
   let apiBase;
@@ -236,13 +240,14 @@ async function runPoll() {
   }
   const stageName = String(settings.stageName || "build").trim() || "build";
 
-  const tabs = await chrome.tabs.query({});
+  const tabs = targetTabs ?? await chrome.tabs.query({});
   const byPipeline = new Map();
 
   for (const tab of tabs) {
     if (!tab.id || !tab.url) continue;
     const parsed = parseGitLabUrl(tab.url);
     if (!parsed) continue;
+    if (buildImagesOnly && parsed.kind !== "mr") continue;
     if (parsed.origin !== new URL(base).origin) continue;
     if (!projectAllowed(parsed.projectPath, settings.projectWhitelist)) continue;
 
@@ -251,11 +256,11 @@ async function runPoll() {
       pipelineId = await resolvePipelineId(parsed, settings);
     } catch (e) {
       console.warn("[gitlab-notifier] resolve pipeline:", e);
-      if (parsed.kind === "mr") await showMrBuildImages([tab], null);
+      if (buildImagesOnly) await showImages([tab], null);
       continue;
     }
     if (pipelineId == null) {
-      if (parsed.kind === "mr") await showMrBuildImages([tab], null);
+      if (buildImagesOnly) await showImages([tab], null);
       continue;
     }
 
@@ -275,18 +280,18 @@ async function runPoll() {
     }
   }
 
-  const notified = await getNotifiedSet();
+  const notified = buildImagesOnly ? {} : await getNotifiedSet();
 
   for (const { origin, projectPath, pipelineId, tabIds, mrTabs } of byPipeline.values()) {
     const nk = notifyKey(origin, projectPath, pipelineId, stageName);
-    if (notified[nk] && !mrTabs.length) continue;
+    if (notified[nk]) continue;
 
     let jobs;
     try {
       jobs = await listPipelineJobs(apiBase, settings.privateToken, projectPath, pipelineId);
     } catch (e) {
       console.warn("[gitlab-notifier] jobs:", e);
-      await showMrBuildImages(mrTabs, null);
+      if (buildImagesOnly) await showImages(mrTabs, null);
       continue;
     }
 
@@ -296,18 +301,18 @@ async function runPoll() {
     );
     const agg = aggregateStage(inStage, settings);
 
-    if (mrTabs.length) {
+    if (buildImagesOnly) {
       try {
         const images = agg.phase === "done" && agg.ok
           ? await getBuildImages(apiBase, settings.privateToken, projectPath, inStage)
           : [];
-        await showMrBuildImages(mrTabs, { projectPath, pipelineId, stageName, images });
+        await showImages(mrTabs, { projectPath, pipelineId, stageName, images });
       } catch (e) {
         console.warn("[gitlab-notifier] MR build image:", e);
-        await showMrBuildImages(mrTabs, null);
+        await showImages(mrTabs, null);
       }
+      continue;
     }
-    if (notified[nk]) continue;
 
     const phaseKeys = tabIds.map((id) => tabPhaseStorageKey(id, nk));
     const prevByKey = await chrome.storage.session.get(phaseKeys);
@@ -364,6 +369,24 @@ async function runPoll() {
   }
 }
 
+const imageRefreshByTab = new Map();
+let imageRefreshSequence = 0;
+
+/** Refresh only image rows, ignoring results superseded by a newer check of the same tab. */
+async function refreshMrBuildImages(targetTabs) {
+  const sequence = ++imageRefreshSequence;
+  try {
+    const tabs = targetTabs ?? await chrome.tabs.query({});
+    for (const tab of tabs) {
+      imageRefreshByTab.set(tab.id, Math.max(sequence, imageRefreshByTab.get(tab.id) || 0));
+    }
+    const isCurrent = (tab) => imageRefreshByTab.get(tab.id) === sequence;
+    await runPoll(tabs.filter(isCurrent), { buildImagesOnly: true, isCurrent });
+  } catch (e) {
+    console.warn("[gitlab-notifier] build image refresh:", e);
+  }
+}
+
 function scheduleAlarm(delaySec) {
   const sec = Math.max(10, Math.min(600, Number(delaySec) || 25));
   const delayMinutes = sec / 60;
@@ -379,6 +402,7 @@ chrome.runtime.onInstalled.addListener(() => {
   loadSettings().then((s) => {
     scheduleAlarm(s.pollIntervalSec);
     runPoll().catch(() => {});
+    refreshMrBuildImages();
   });
 });
 
@@ -387,6 +411,7 @@ chrome.runtime.onStartup.addListener(() => {
   loadSettings().then((s) => {
     scheduleAlarm(s.pollIntervalSec);
     runPoll().catch(() => {});
+    refreshMrBuildImages();
   });
 });
 
@@ -396,6 +421,7 @@ chrome.alarms.onAlarm.addListener((a) => {
     return;
   }
   if (a.name !== ALARM) return;
+  refreshMrBuildImages();
   runPoll()
     .catch((e) => console.warn("[gitlab-notifier] poll", e))
     .finally(() => {
@@ -414,7 +440,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab?.url) return;
+  if (!tab?.url) return;
+  const pageReady = changeInfo.status === "complete";
+  const spaNavigation = changeInfo.url && tab.status === "complete";
+  if (!pageReady && !spaNavigation) return;
   if (
     !tab.url.includes("/-/merge_requests/") &&
     !tab.url.includes("/-/pipelines/") &&
@@ -422,10 +451,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   ) {
     return;
   }
-  loadSettings().then((s) => scheduleAlarm(Math.min(20, s.pollIntervalSec)));
+  // Preserve the original notification schedule on full page loads.
+  if (pageReady) {
+    loadSettings().then((s) => scheduleAlarm(Math.min(20, s.pollIntervalSec)));
+  }
+  if (parseGitLabUrl(tab.url)?.kind === "mr") refreshMrBuildImages([tab]);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  imageRefreshByTab.delete(tabId);
   const prefix = `tabStagePhase:${tabId}\n`;
   chrome.storage.session.get(null).then((all) => {
     const toRemove = Object.keys(all).filter((k) => k.startsWith(prefix));

@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MR build image browser regression tests</title>
+<main id="content-body"></main>
+<pre id="result">Running…</pre>
+<script type="module">
+import { renderMrBuildImages } from "../mr-build-image.js";
+
+const container = document.querySelector("main");
+const result = document.querySelector("#result");
+const build = {
+  projectPath: "team/app", pipelineId: 10, stageName: "build",
+  images: [{ image: "registry.example.com/team/app:123-42", jobId: 42, jobName: "build" }],
+};
+const host = () => document.querySelector("#gitlab-notifier-build-image");
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+const checks = [];
+function check(condition, name) {
+  if (!condition) throw new Error(name);
+  checks.push(name);
+}
+function mountCard(pipelineId = 10) {
+  const card = document.createElement("div");
+  card.dataset.testid = "pipeline-container";
+  const body = document.createElement("div");
+  body.className = "media-body";
+  const link = document.createElement("a");
+  link.href = `/team/app/-/pipelines/${pipelineId}`;
+  link.textContent = `Pipeline #${pipelineId}`;
+  body.append(link);
+  card.append(body);
+  container.replaceChildren(card);
+  return body;
+}
+
+try {
+  renderMrBuildImages(location.href, build);
+  check(host()?.hidden, "hidden while the pipeline widget is loading");
+  let body = mountCard();
+  await settle();
+  check(body.contains(host()) && !host().hidden, "attach after the initial widget render");
+  body = mountCard();
+  await settle();
+  check(body.contains(host()) && !host().hidden, "restore after GitLab replaces the pipeline widget");
+  renderMrBuildImages(location.href, build);
+  check(document.querySelectorAll("#gitlab-notifier-build-image").length === 1, "no duplicate rows");
+  let copied;
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+    writeText: async text => { copied = text; },
+  } });
+  host().shadowRoot.querySelector("button").click();
+  await settle();
+  check(copied === build.images[0].image, "copy the complete image tag");
+  body.querySelector("a").href = "/team/app/-/pipelines/11";
+  await settle();
+  check(host()?.hidden, "hide an old tag when the native pipeline ID changes");
+  body = mountCard(11);
+  await settle();
+  check(host()?.hidden, "never attach the old tag visibly to a different pipeline");
+  body = mountCard();
+  await settle();
+  check(body.contains(host()) && !host().hidden, "restore only to the matching pipeline");
+  renderMrBuildImages(location.href, { ...build, images: [] });
+  body = mountCard();
+  await settle();
+  check(!host(), "a cleared image is not resurrected by the observer");
+  renderMrBuildImages(location.href, build);
+  const original = location.href;
+  history.pushState({}, "", location.pathname + "/other");
+  container.append(document.createElement("span"));
+  await settle();
+  check(!host(), "remove on navigation to another MR");
+  history.replaceState({}, "", original);
+  result.textContent = `PASS (${checks.length})\n${checks.join("\n")}`;
+} catch (error) {
+  result.textContent = `FAIL: ${error.message}\nPassed: ${checks.join(", ")}`;
+  console.error(error);
+}
+</script>

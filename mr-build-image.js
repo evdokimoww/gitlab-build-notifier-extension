@@ -44,14 +44,15 @@ export function renderMrBuildImages(expectedUrl, build) {
   if (location.origin !== expected.origin || location.pathname !== expected.pathname) return;
   const id = "gitlab-notifier-build-image";
   let host = document.getElementById(id);
+  const signature = build?.images.length ? JSON.stringify(build) : "";
+  if (host?.dataset.build === signature) return;
+  // A detached widget still has an observer that must be disposed on a new result.
+  document.__gitlabBuildImageCleanup?.();
+  host?.remove();
   if (!build?.images.length) {
-    host?.remove();
     return;
   }
-  const signature = JSON.stringify(build);
-  if (host?.dataset.build === signature) return;
-  host?.remove();
-  const container = document.querySelector("#content-body") || document.querySelector("main");
+  let container = document.querySelector("#content-body") || document.querySelector("main");
   if (!container) return;
   host = document.createElement("section");
   host.id = id;
@@ -60,46 +61,55 @@ export function renderMrBuildImages(expectedUrl, build) {
   const root = host.attachShadow({ mode: "open" });
   const style = document.createElement("style");
   style.textContent = `
-    :host { display: block; margin: 12px 0 16px; color: var(--gl-text-color, #333238); }
-    .panel { padding: 12px 16px; border: 1px solid var(--gl-border-color, #bfbfc3);
-      border-left: 3px solid #108548; border-radius: 6px;
-      background: var(--gl-background-color-default, #fff); font: 14px/1.5 sans-serif; }
-    .heading { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-    code { flex: 1 1 280px; overflow-wrap: anywhere; user-select: text; font-size: 13px; }
-    a { color: var(--gl-link-color, #1068bf); text-decoration: underline; }
-    button { color: inherit; background: transparent; border: 1px solid var(--gl-border-color, #bfbfc3);
-      border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+    :host { display: block; margin-top: 8px; font: inherit; color: inherit; }
+    :host([hidden]) { display: none; }
+    .panel { font: inherit; line-height: 1.5; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row + .row { margin-top: 8px; }
+    .image { flex: 1; min-width: 0; }
+    code { overflow-wrap: anywhere; user-select: text; font-size: 0.875em;
+      font-family: var(--gl-font-family-monospace, ui-monospace, monospace); }
+    .job { color: inherit; text-decoration: none; }
+    .job:hover { color: var(--gl-link-color, #1068bf); text-decoration: underline; }
+    button { display: inline-flex; align-items: center; justify-content: center; flex: none;
+      min-width: 28px; min-height: 28px; padding: 4px; color: inherit;
+      background: transparent; border: 0; border-radius: 4px; font: inherit; cursor: pointer; }
+    button:hover { background: var(--gl-button-default-tertiary-background-color-hover, #ececef); }
+    svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+    .feedback { font-size: 0.875em; color: var(--gl-text-color-secondary, inherit); }
     button:focus-visible, a:focus-visible { outline: 2px solid #1f75cb; outline-offset: 2px; }
   `;
   root.append(style);
   const panel = document.createElement("div");
   panel.className = "panel";
-  const heading = document.createElement("div");
-  heading.className = "heading";
-  const title = document.createElement("strong");
-  title.textContent = `Сборка готова · ${build.stageName}`;
   const projectUrl = `${expected.origin}/${build.projectPath}/-`;
-  const pipeline = document.createElement("a");
-  pipeline.href = `${projectUrl}/pipelines/${build.pipelineId}`;
-  pipeline.textContent = `Pipeline #${build.pipelineId}`;
-  heading.append(title, pipeline);
-  panel.append(heading);
   for (const { image, jobId, jobName } of build.images) {
     const row = document.createElement("div");
     row.className = "row";
     const code = document.createElement("code");
     code.textContent = image;
+    const details = document.createElement("div");
+    details.className = "image";
     const copy = document.createElement("button");
     copy.type = "button";
-    copy.textContent = "Копировать";
+    copy.title = "Копировать имя образа";
     copy.setAttribute("aria-label", `Копировать ${image}`);
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 16 16");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M5.5 4V2.5h8v8H12 M2.5 5.5h8v8h-8z");
+    icon.append(path);
+    copy.append(icon);
+    const feedback = document.createElement("span");
+    feedback.className = "feedback";
+    feedback.setAttribute("role", "status");
     copy.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(image);
-        copy.textContent = "Скопировано";
+        feedback.textContent = " · Скопировано";
       } catch {
-        copy.textContent = "Выделите и скопируйте имя";
+        feedback.textContent = " · Выделите и скопируйте имя";
         const selection = window.getSelection();
         const range = document.createRange();
         range.selectNodeContents(code);
@@ -108,22 +118,51 @@ export function renderMrBuildImages(expectedUrl, build) {
       }
     });
     const job = document.createElement("a");
+    job.className = "job";
     job.href = `${projectUrl}/jobs/${jobId}`;
-    job.textContent = `${jobName} #${jobId}`;
-    row.append(code, copy, job);
+    job.title = `Открыть ${jobName} #${jobId}`;
+    job.setAttribute("aria-label", `Образ сборки ${image}, ${jobName} #${jobId}`);
+    job.append(code);
+    details.append(job, feedback);
+    row.append(details, copy);
     panel.append(row);
   }
   root.append(panel);
-  const header = container.querySelector(".detail-page-header");
-  if (header) header.after(host);
-  else container.prepend(host);
+  function placePanel() {
+    container = document.querySelector("#content-body") || document.querySelector("main");
+    if (!container) {
+      host.remove();
+      return;
+    }
+    const pipelineCard = container.querySelector('[data-testid="pipeline-container"]');
+    const matchesPipeline = pipelineCard && Array.from(pipelineCard.querySelectorAll("a[href]"))
+      .some((link) => link.href === `${projectUrl}/pipelines/${build.pipelineId}`);
+    host.hidden = !matchesPipeline;
+    if (pipelineCard) {
+      const content = pipelineCard.querySelector(".media-body") || pipelineCard;
+      if (host.parentElement !== content) content.append(host);
+    } else if (!host.isConnected) {
+      container.append(host);
+    }
+  }
+  placePanel();
 
   // GitLab can navigate between MRs without reloading the document.
   const observer = new MutationObserver(() => {
-    if (!host.isConnected || location.pathname !== expected.pathname) {
-      host.remove();
-      observer.disconnect();
+    if (location.pathname !== expected.pathname) {
+      cleanup();
+      return;
     }
+    // The pipeline widget can finish loading after the API response.
+    placePanel();
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  function cleanup() {
+    observer.disconnect();
+    host.remove();
+    delete document.__gitlabBuildImageCleanup;
+  }
+  document.__gitlabBuildImageCleanup = cleanup;
+  observer.observe(document.body, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ["href"],
+  });
 }
