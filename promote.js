@@ -79,10 +79,19 @@ function setActiveSessionControls(session) {
   $("newMr").hidden = !(session?.status === "success" && session?.buildImage);
 }
 
+function setBuildImageReady(ready, image = "") {
+  const block = $("buildImageBlock");
+  const input = $("buildImage");
+  const copyBtn = $("copyImage");
+  input.value = image;
+  input.disabled = !ready;
+  copyBtn.disabled = !ready;
+  block.classList.toggle("ready", Boolean(ready));
+}
+
 function clearDetailView() {
   setLogText("");
-  $("buildImage").value = "";
-  $("buildImageBlock").classList.remove("visible");
+  setBuildImageReady(false);
   $("newMr").hidden = true;
   setActiveSessionControls(null);
 }
@@ -101,11 +110,9 @@ function applySession(session) {
   setActiveSessionControls(session);
 
   if (session.buildImage) {
-    $("buildImage").value = session.buildImage;
-    $("buildImageBlock").classList.add("visible");
+    setBuildImageReady(true, session.buildImage);
   } else {
-    $("buildImage").value = "";
-    $("buildImageBlock").classList.remove("visible");
+    setBuildImageReady(false);
   }
 
   if (session.statusText) {

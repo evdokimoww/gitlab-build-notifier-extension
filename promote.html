@@ -44,13 +44,14 @@
         box-sizing: border-box;
       }
 
-      html {
-        min-height: 100%;
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
       }
 
       body {
         min-width: 320px;
-        min-height: 100vh;
         margin: 0;
         color: var(--text);
         background-color: var(--bg);
@@ -86,13 +87,17 @@
 
       .app-shell {
         width: min(1440px, 100%);
-        min-height: 100vh;
+        height: 100%;
         margin: 0 auto;
-        padding: 0 28px 32px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 0 28px 16px;
       }
 
       .topbar {
-        min-height: 68px;
+        flex: 0 0 auto;
+        min-height: 56px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -181,11 +186,12 @@
       }
 
       .intro {
+        flex: 0 0 auto;
         display: grid;
         grid-template-columns: minmax(280px, 0.8fr) minmax(540px, 1.2fr);
-        gap: 60px;
+        gap: 40px;
         align-items: end;
-        padding: 44px 4px 34px;
+        padding: 22px 4px 16px;
       }
 
       .eyebrow {
@@ -212,7 +218,7 @@
       h1 {
         max-width: 620px;
         margin: 0;
-        font-size: clamp(30px, 3vw, 44px);
+        font-size: clamp(26px, 2.4vw, 36px);
         font-weight: 720;
         letter-spacing: -0.045em;
         line-height: 1.04;
@@ -220,9 +226,9 @@
 
       .lead {
         max-width: 650px;
-        margin: 15px 0 0;
+        margin: 10px 0 0;
         color: var(--text-soft);
-        font-size: 14px;
+        font-size: 13px;
       }
 
       code {
@@ -299,10 +305,13 @@
       }
 
       .workspace {
+        flex: 1;
+        min-height: 0;
         display: grid;
         grid-template-columns: minmax(350px, 0.78fr) minmax(480px, 1.22fr);
         gap: 18px;
         align-items: stretch;
+        overflow: hidden;
       }
 
       .panel {
@@ -315,23 +324,25 @@
       }
 
       .control-panel {
+        max-height: 100%;
+        overflow-y: auto;
         padding-bottom: 22px;
       }
 
       .activity-panel {
-        min-height: 630px;
+        min-height: 0;
         display: flex;
         flex-direction: column;
-        padding-bottom: 14px;
+        padding-bottom: 12px;
       }
 
       .panel-head {
-        min-height: 66px;
+        min-height: 54px;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        padding: 14px 20px;
+        padding: 10px 20px;
         border-bottom: 1px solid var(--border);
         background: var(--surface-soft);
       }
@@ -579,11 +590,11 @@
       }
 
       #statusLine {
-        min-height: 40px;
+        min-height: 34px;
         display: flex;
         align-items: center;
         margin: 0;
-        padding: 10px 7px;
+        padding: 8px 7px;
         color: var(--text-soft);
         border-bottom: 1px solid var(--border);
         font-size: 12px;
@@ -720,11 +731,11 @@
         display: flex;
         flex: 1;
         flex-direction: column;
-        padding: 12px 14px 0;
+        padding: 10px 14px 0;
       }
 
       .console-head {
-        min-height: 32px;
+        min-height: 28px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -759,13 +770,11 @@
       }
 
       #log {
-        min-height: 420px;
+        min-height: 0;
         flex: 1;
-        height: calc(100vh - 420px);
-        max-height: 760px;
         margin: 0;
         overflow: auto;
-        padding: 16px;
+        padding: 12px 14px;
         color: var(--console-text);
         border: 1px solid var(--console-border);
         border-radius: 0 0 9px 9px;
@@ -787,30 +796,47 @@
       }
 
       #buildImageBlock {
-        display: none;
-        margin: 12px 14px 0;
-        padding: 13px;
-        border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--border));
+        flex: 0 0 auto;
+        margin: 10px 14px 0;
+        padding: 11px 13px;
+        border: 1px solid var(--border);
         border-radius: 9px;
-        background: var(--ok-soft);
+        background: var(--surface-soft);
+        opacity: 0.72;
+        transition:
+          opacity 0.16s ease,
+          border-color 0.16s ease,
+          background 0.16s ease;
       }
 
-      #buildImageBlock.visible {
-        display: block;
+      #buildImageBlock.ready {
+        opacity: 1;
+        border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+        background: var(--ok-soft);
       }
 
       #buildImageBlock label {
         margin: 0;
-        color: var(--ok);
+        color: var(--text-faint);
         font-family: var(--mono);
         font-size: 10px;
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
 
+      #buildImageBlock.ready label {
+        color: var(--ok);
+      }
+
       #buildImage {
         font-family: var(--mono);
         font-size: 11px;
+      }
+
+      #buildImage:disabled {
+        color: var(--text-faint);
+        opacity: 1;
+        cursor: not-allowed;
       }
 
       .build-actions {
@@ -1002,21 +1028,41 @@
       }
 
       @media (max-width: 1040px) {
+        html,
+        body {
+          height: auto;
+          overflow: auto;
+        }
+
+        .app-shell {
+          height: auto;
+          overflow: visible;
+        }
+
         .intro {
           grid-template-columns: 1fr;
           gap: 28px;
         }
 
         .workspace {
+          flex: none;
           grid-template-columns: 1fr;
+          overflow: visible;
+        }
+
+        .control-panel,
+        .activity-panel {
+          max-height: none;
         }
 
         .activity-panel {
-          min-height: 560px;
+          min-height: 420px;
         }
 
         #log {
-          height: 480px;
+          min-height: 220px;
+          height: min(280px, 40vh);
+          flex: none;
         }
       }
 
@@ -1283,6 +1329,27 @@
             ></div>
           </div>
 
+          <div id="buildImageBlock">
+            <label>
+              Build image
+              <input
+                type="text"
+                id="buildImage"
+                readonly
+                disabled
+                placeholder="ожидание сборки…"
+              />
+            </label>
+            <div class="build-actions">
+              <button type="button" id="copyImage" disabled>
+                Копировать образ
+              </button>
+              <button type="button" id="newMr" class="primary" hidden>
+                Новый MR
+              </button>
+            </div>
+          </div>
+
           <div id="logPanel">
             <div class="console-head">
               <span>Promote output</span>
@@ -1291,19 +1358,6 @@
               ></span>
             </div>
             <pre id="log" aria-live="polite"></pre>
-          </div>
-
-          <div id="buildImageBlock">
-            <label>
-              Build image
-              <input type="text" id="buildImage" readonly />
-            </label>
-            <div class="build-actions">
-              <button type="button" id="copyImage">Копировать образ</button>
-              <button type="button" id="newMr" class="primary" hidden>
-                Новый MR
-              </button>
-            </div>
           </div>
         </section>
       </main>
