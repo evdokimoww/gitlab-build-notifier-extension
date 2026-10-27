@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Authorization refresh ordering regression</title>
+<button id="checkAuth">Check</button>
+<button id="connectSites">Connect</button>
+<p id="connectionHint"></p>
+<div id="authStatus"></div>
+<pre id="result">Running…</pre>
+<script type="module">
+import { bindAuthStatus } from "../auth-status.js";
+let token = "old-user";
+const permissions = [];
+globalThis.chrome = {
+  storage: { local: { async get(defaults) { return { ...defaults, privateToken: token }; } } },
+  permissions: {
+    contains({ origins }) {
+      return origins.length === 3 ? new Promise(resolve => permissions.push(resolve)) : Promise.resolve(true);
+    },
+  },
+};
+globalThis.fetch = async (url, options) => new Response(JSON.stringify(
+  url.includes("/api/v4/user") ? { id: 1, username: options.headers["PRIVATE-TOKEN"] } : { name: "jira-user" },
+), { headers: { "content-type": "application/json" } });
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+const checks = [];
+function check(condition, name) { if (!condition) throw new Error(name); checks.push(name); }
+const user = () => document.querySelector(".auth-state").textContent;
+try {
+  const refresh = bindAuthStatus();
+  await settle();
+  token = "new-user";
+  const newer = refresh();
+  await settle();
+  permissions[1](true);
+  await newer;
+  check(user().includes("new-user"), "show the account belonging to the newly saved token");
+  permissions[0](true);
+  await settle();
+  check(user().includes("new-user"), "a delayed previous permission check cannot restore the old account");
+
+  token = "older-user";
+  const older = refresh();
+  await settle();
+  token = "latest-user";
+  const latest = refresh();
+  await settle();
+  permissions[2](true);
+  await older;
+  check(document.getElementById("checkAuth").disabled, "an old refresh cannot enable controls while a newer check is pending");
+  permissions[3](true);
+  await latest;
+  check(user().includes("latest-user") && !document.getElementById("checkAuth").disabled, "finish with the latest account and enabled controls");
+  document.getElementById("result").textContent = `PASS (${checks.length})\n${checks.join("\n")}`;
+} catch (error) {
+  document.getElementById("result").textContent = `FAIL\n${error.message}`;
+}
+</script>

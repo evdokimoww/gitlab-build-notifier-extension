@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Jira first-install regression</title>
+<h1><a id="issue" href="https://jira.t1-group.ru/browse/RNISSO26-394">RNISSO26-394</a></h1>
+<iframe title="Actual extension popup" style="width:420px;height:850px"></iframe>
+<pre id="result">Running…</pre>
+<script type="module">
+import { initializeJiraLinks } from "../jira-background.js";
+const result = document.querySelector("#result");
+const issue = document.querySelector("#issue");
+const checks = [];
+const realFetch = globalThis.fetch;
+const sites = new Set();
+const requested = [];
+let permit = false;
+let reads = 0;
+const event = () => {
+  const listeners = [];
+  return { addListener(fn) { listeners.push(fn); }, fire(...args) { listeners.forEach(fn => fn(...args)); } };
+};
+const added = event();
+const messages = event();
+const tab = { id: 1, url: "https://git-02.t1-group.ru/team/app/-/merge_requests/71", status: "complete" };
+globalThis.chrome = {
+  storage: { onChanged: event(), local: {
+    get(defaults, callback) { const saved = { ...defaults }; callback?.(saved); return Promise.resolve(saved); },
+  } },
+  permissions: { onAdded: added, onRemoved: event(),
+    contains: async ({ origins }) => origins.every(origin => sites.has(origin)),
+    async request({ origins }) {
+      requested.push(origins);
+      if (!permit) return false;
+      origins.forEach(origin => sites.add(origin));
+      added.fire({ origins });
+      return true;
+    },
+  },
+  tabs: { query: async () => [tab], onUpdated: event(), create() {} },
+  scripting: { async executeScript({ func, args }) { func(...args); } },
+  runtime: { onInstalled: event(), onStartup: event(), onMessage: messages,
+    getURL: value => value, getManifest: () => ({ version: "test" }), openOptionsPage() {},
+    sendMessage(message) { return new Promise(resolve => messages.fire(message, { tab, url: tab.url }, resolve)); },
+  },
+};
+globalThis.fetch = async (input, options) => {
+  const url = new URL(input, location.href);
+  if (!url.host.endsWith("t1-group.ru")) return realFetch(input, options);
+  reads++;
+  let data = { name: "test-user" };
+  const code = url.pathname.includes("/issue/") && url.host === "jira.t1-group.ru" ? 404 : 200;
+  if (url.pathname.includes("/issue/")) data = { id: "123", key: "RNISSO26-394" };
+  return new Response(JSON.stringify(data), { status: code, headers: { "content-type": "application/json" } });
+};
+function check(condition, name) { if (!condition) throw new Error(name); checks.push(name); }
+const settle = () => new Promise(resolve => setTimeout(resolve, 60));
+try {
+  initializeJiraLinks();
+  const markup = await (await realFetch("../popup.html")).text();
+  const frame = document.querySelector("iframe");
+  frame.srcdoc = markup.replace("<head>", '<head><base href="../"><script>globalThis.chrome=parent.chrome;globalThis.fetch=parent.fetch;<\/script>');
+  await new Promise(resolve => frame.addEventListener("load", resolve, { once: true }));
+  await settle();
+  check(reads === 0 && issue.href.startsWith("https://jira.t1-group.ru/"), "fresh install makes no requests without site permission");
+  const popup = frame.contentDocument;
+  const connect = popup.querySelector("#connectSites");
+  check(connect && !connect.hidden && !connect.disabled, "fresh install provides an enabled connect button in the actual popup");
+  connect.click();
+  await settle();
+  check(reads === 0 && !connect.hidden, "denied permission keeps connection action available and makes no requests");
+  permit = true;
+  connect.click();
+  await settle();
+  check(requested.at(-1).length === 3, "request GitLab and both Jira hosts together");
+  check(issue.href === "https://tasks.t1-group.ru/browse/RNISSO26-394", "granting permission rewrites the already-open MR link without any GitLab token");
+  check(connect.hidden, "hide connect action after permission is granted");
+  check(popup.querySelector(".auth-state").textContent.includes("Токен GitLab не задан"), "missing GitLab token remains visible while Jira links work");
+  result.textContent = `PASS (${checks.length})\n${checks.join("\n")}`;
+} catch (error) { result.textContent = `FAIL\n${error.message}`; }
+finally { document.__gitlabJiraCleanup?.(); }
+</script>

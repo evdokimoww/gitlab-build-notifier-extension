@@ -53,6 +53,7 @@ function harness({ notified = false, jobs = [job], tabs = [tab] } = {}) {
     showMrBuildImages: async (tabs, build) => calls.displays.push({ tabs, build }),
     deliverCiNotification: async (...args) => calls.notices.push(args),
     reconcileStalePromoteSession: async () => {},
+    initializeJiraLinks: () => {},
     PROMOTE_KEEPALIVE_ALARM: "promote-keepalive",
     promoteKeepaliveTick: async () => { calls.keepalives = (calls.keepalives || 0) + 1; },
   });

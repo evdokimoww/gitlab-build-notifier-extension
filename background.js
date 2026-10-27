@@ -8,6 +8,7 @@ import {
 import { deliverCiNotification } from "./ci-notify.js";
 import { getBuildImages, showMrBuildImages } from "./mr-build-image.js";
 import { DEFAULT_BRANCH_MAPPINGS } from "./gitlab-promote.js";
+import { initializeJiraLinks } from "./jira-background.js";
 import {
   acceptPromoteStart,
   cancelPromoteRun,
@@ -26,6 +27,8 @@ import {
 reconcileStalePromoteSession().catch((e) =>
   console.warn("[gitlab-notifier] promote reconcile", e)
 );
+
+initializeJiraLinks();
 
 const ALARM = "gitlab-ci-poll";
 
