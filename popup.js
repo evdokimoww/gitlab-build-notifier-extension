@@ -1,3 +1,7 @@
+import { bindAuthStatus } from "./auth-status.js";
+
+bindAuthStatus();
+
 document.getElementById("opts").addEventListener("click", (e) => {
   e.preventDefault();
   if (chrome.runtime.openOptionsPage) {
@@ -10,7 +14,7 @@ document.getElementById("promote").addEventListener("click", (e) => {
   chrome.tabs.create({ url: chrome.runtime.getURL("promote.html") });
 });
 
-chrome.storage.local.get({ pollIntervalSec: 25, gitlabBaseUrl: "" }, (s) => {
+chrome.storage.local.get({ pollIntervalSec: 25, gitlabBaseUrl: "https://git-02.t1-group.ru" }, (s) => {
   const el = document.getElementById("line");
-  if (el) el.textContent = `База: ${s.gitlabBaseUrl || "(не задана)"}. Опрос каждые ${s.pollIntervalSec} с.`;
+  if (el) el.textContent = `v${chrome.runtime.getManifest().version} · ${s.gitlabBaseUrl || "(не задана)"}. Опрос каждые ${s.pollIntervalSec} с.`;
 });

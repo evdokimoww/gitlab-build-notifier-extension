@@ -685,6 +685,7 @@
       }
     </style>
     <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="auth-status.css" />
     <script src="theme.js"></script>
   </head>
   <body>
@@ -742,7 +743,7 @@
             </label>
 
             <label>
-              Personal Access Token
+              Personal Access Token GitLab
               <span class="field-tag">secret</span>
               <input
                 type="password"
@@ -794,6 +795,44 @@
                 все.</span
               >
             </label>
+          </div>
+        </section>
+
+        <section class="panel panel--wide">
+          <header class="panel-head">
+            <h2 class="panel-title">Авторизация</h2>
+          </header>
+          <div class="panel-body auth-settings">
+            <button type="button" id="connectSites" class="auth-refresh" hidden disabled>Подключить сайты</button>
+            <p id="connectionHint" class="auth-hint" aria-live="polite" hidden></p>
+            <div id="authStatus" class="auth-status" aria-live="polite"></div>
+            <button type="button" id="checkAuth" class="auth-refresh">Проверить доступ</button>
+            <span class="hint">Проверяются сохранённые настройки. После входа в Jira нажмите «Проверить доступ».</span>
+          </div>
+        </section>
+
+        <section class="panel panel--wide">
+          <header class="panel-head">
+            <div>
+              <span class="panel-kicker">Jira</span>
+              <h2 class="panel-title">Ссылки на задачи из GitLab</h2>
+            </div>
+          </header>
+          <div class="panel-body">
+            <label class="toggle">
+              <input type="checkbox" id="enableJiraLinks" />
+              <span>
+                <span class="toggle-title">Проверять задачу в обеих Jira</span>
+                <span class="toggle-copy">Открывать задачи из заголовков, описаний и комментариев в новых вкладках. Если задача найдена в обеих Jira, открывать обе. Вкладка GitLab сохраняется.</span>
+              </span>
+            </label>
+            <label>Первая Jira
+              <input type="text" id="jiraUrl1" autocomplete="off" />
+            </label>
+            <label>Вторая Jira
+              <input type="text" id="jiraUrl2" autocomplete="off" />
+            </label>
+            <span class="hint">Базовые URL, без /browse/KEY-123. Используется сессия текущего профиля браузера. Токен GitLab для Jira не нужен. Если требуется вход, откройте Jira обычным способом и авторизуйтесь.</span>
           </div>
         </section>
 

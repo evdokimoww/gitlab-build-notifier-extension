@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GitLab build stage notifier",
-  "version": "1.5.6",
+  "version": "1.6.4",
   "description": "Уведомления о stage в GitLab и promote MR (feature → staging → production)",
   "icons": {
     "16": "icons/extension-16.png",
@@ -10,7 +10,11 @@
     "128": "icons/extension-128.png"
   },
   "permissions": ["tabs", "storage", "notifications", "alarms", "scripting", "offscreen"],
-  "host_permissions": [],
+  "host_permissions": [
+    "https://git-02.t1-group.ru/*",
+    "https://tasks.t1-group.ru/*",
+    "https://jira.t1-group.ru/*"
+  ],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "background.js",

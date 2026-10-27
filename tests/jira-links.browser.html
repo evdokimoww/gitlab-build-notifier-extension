@@ -1,0 +1,159 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Jira link regression tests</title>
+<main><h1><a id="title" href="https://jira.example.com/browse/RNISSO26-394">RNISSO26-394</a></h1>
+  <p><a id="description" href="https://jira.example.com/browse/RNISSO26-394?focusedCommentId=12631#comment-12631">Комментарий</a></p>
+  <a id="unrelated" href="https://other.example.com/browse/RNISSO26-394">Other tracker</a>
+</main>
+<pre id="result">Running…</pre>
+<script type="module">
+import { installJiraLinks } from "../jira-links.js";
+const urls = ["https://tasks.example.com", "https://jira.example.com"];
+const config = { enabled: true, baseUrls: urls };
+const result = document.querySelector("#result");
+const title = document.querySelector("#title");
+const original = title.href;
+const calls = [];
+let states = ["found", "not-found"];
+let gate;
+const response = key => ({ ok: true, result: { key, expires: Date.now() + 300000,
+  sites: urls.map((baseUrl, index) => ({ baseUrl, state: states[index],
+    message: states[index], ...(states[index] === "found" ? { url: `${baseUrl}/browse/${key}` } : {}) })) } });
+globalThis.chrome = { runtime: { async sendMessage(message) {
+  calls.push(message);
+  if (message.type === "jira-open") return { ok: true, result: { opened: states.filter(state => state === "found").length } };
+  if (gate) await gate;
+  return response(message.key);
+} } };
+const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+const checks = [];
+function check(condition, name) { if (!condition) throw new Error(name); checks.push(name); }
+const panel = () => document.querySelector("#gitlab-notifier-jira-choice")?.shadowRoot;
+function click(link, type = "click", options = {}) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, ...options });
+  // Prevent navigation after observing whether the extension allowed the native click.
+  let allowed;
+  const preventNavigation = e => { allowed = !e.defaultPrevented; e.preventDefault(); };
+  link.addEventListener(type, preventNavigation);
+  link.dispatchEvent(event);
+  link.removeEventListener(type, preventNavigation);
+  return { event, allowed };
+}
+try {
+  installJiraLinks(config);
+  await settle();
+  check(title.href === `${urls[0]}/browse/RNISSO26-394`, "rewrite the auto-linked MR title");
+  check(title.target === "_blank" && document.querySelector("#description").target === "_blank", "single confirmed task links always open in a new tab");
+  check(title.relList.contains("noopener"), "new task tabs cannot replace the MR through window.opener");
+  check(document.querySelector("#description").href === `${urls[0]}/browse/RNISSO26-394?focusedCommentId=12631#comment-12631`, "preserve comment query and fragment");
+  check(calls.length === 1, "deduplicate title and description with the same issue key");
+  check(document.querySelector("#unrelated").href.startsWith("https://other.example.com/"), "ignore other trackers");
+  check(click(title, "click", { ctrlKey: true }).allowed === true, "verified link retains native Ctrl+click");
+  check(click(title, "auxclick", { button: 1 }).allowed === true, "verified link retains native middle click");
+  check(click(title, "contextmenu", { button: 2 }).allowed === true, "verified link retains native context menu");
+  const comment = document.querySelector("#description");
+  comment.href = `${urls[1]}/browse/RNISSO26-394?focusedCommentId=999#comment-999`;
+  await settle();
+  click(comment);
+  check(comment.href === `${urls[0]}/browse/RNISSO26-394?focusedCommentId=999#comment-999`, "a reused same-key anchor keeps its updated comment query and fragment");
+
+  const dynamic = document.createElement("a");
+  dynamic.href = `${urls[1]}/browse/DYNAMIC-7`;
+  dynamic.textContent = "DYNAMIC-7";
+  document.querySelector("main").append(dynamic);
+  await settle();
+  check(dynamic.href === `${urls[0]}/browse/DYNAMIC-7`, "resolve comments inserted after page load");
+  document.__gitlabJiraCleanup();
+  check(title.href === original && !title.hasAttribute("title") && !title.hasAttribute("target") && !title.hasAttribute("rel"), "restore original URLs, titles and link attributes on cleanup");
+
+  states = ["found", "found"];
+  installJiraLinks(config);
+  await settle();
+  check(title.href === original, "keep the original href when both Jira servers contain the key");
+  check(!calls.some(call => call.type === "jira-open"), "prefetch never opens Jira tabs");
+  check(click(title).event.defaultPrevented, "intercept a click to open both Jira tasks");
+  await settle();
+  check(calls.at(-1).type === "jira-open" && calls.at(-1).background === false, "a normal click requests both tabs in the foreground");
+  check(!panel(), "close progress after opening both tasks");
+  click(title, "click", { ctrlKey: true });
+  await settle();
+  check(calls.at(-1).type === "jira-open" && calls.at(-1).background === true, "Ctrl+click opens both tasks in background tabs");
+  click(title, "auxclick", { button: 1 });
+  await settle();
+  check(calls.at(-1).type === "jira-open" && calls.at(-1).background === true, "middle click opens both tasks in background tabs");
+  const openingRequests = calls.filter(call => call.type === "jira-open").length;
+  click(title, "contextmenu", { button: 2 });
+  await settle();
+  check(calls.filter(call => call.type === "jira-open").length === openingRequests, "a context menu does not open tabs");
+  check(panel().querySelectorAll("a").length === 2, "context menu keeps both individual destinations available");
+  check([...panel().querySelectorAll("a")].every(link => link.target === "_blank"), "individual confirmed destinations always open in new tabs");
+  check(panel().querySelector("a").href === `${urls[0]}/browse/RNISSO26-394`, "individual destinations use confirmed issue URLs");
+  document.__gitlabJiraCleanup();
+
+  states = ["login", "not-found"];
+  installJiraLinks(config);
+  await settle();
+  check(click(title).event.defaultPrevented, "do not follow unconfirmed old Jira link");
+  await settle();
+  check(panel().querySelector("a").href === `${urls[0]}/`, "offer ordinary Jira login when session is missing");
+  check(!panel().textContent.includes("Открыть RNISSO26-394"), "login is not a confirmed issue");
+  states = ["found", "not-found"];
+  panel().querySelector("button").click();
+  await settle();
+  check(calls.at(-2).type === "jira-resolve" && calls.at(-2).refresh === true && title.href.startsWith(urls[0]), "retry after login refreshes cached failure");
+  document.__gitlabJiraCleanup();
+
+  let release;
+  gate = new Promise(resolve => { release = resolve; });
+  installJiraLinks(config);
+  check(click(title).event.defaultPrevented, "block click while probes are pending");
+  check(panel().textContent.includes("Проверяем"), "show progress while resolving");
+  installJiraLinks({ ...config, enabled: false });
+  release();
+  gate = null;
+  await settle();
+  check(title.href === original && !panel(), "late results cannot rewrite links after disabling");
+  check(click(title).allowed === true, "disabled feature restores native navigation");
+
+  title.href = `${urls[1]}/browse/RNISSO26-394?atlogin=test-only-old-jira-token&focusedCommentId=12631#comment-12631`;
+  installJiraLinks(config);
+  await settle();
+  check(!new URL(title.href).searchParams.has("atlogin"), "do not transfer old Jira auto-login credentials to the other Jira");
+  check(new URL(title.href).searchParams.get("focusedCommentId") === "12631", "keep comment navigation when stripping auto-login");
+  document.__gitlabJiraCleanup();
+  states = ["found", "found"];
+  installJiraLinks(config);
+  await settle();
+  click(title, "contextmenu", { button: 2 });
+  await settle();
+  const destinations = [...panel().querySelectorAll("a")].map(link => new URL(link.href));
+  check(!destinations[0].searchParams.has("atlogin"), "chooser does not transfer old Jira auto-login credentials");
+  check(destinations[1].searchParams.has("atlogin"), "keep original auto-login only on its own Jira");
+  document.__gitlabJiraCleanup();
+  let finishCheck;
+  gate = new Promise(resolve => { finishCheck = resolve; });
+  const beforePending = calls.filter(call => call.type === "jira-open").length;
+  installJiraLinks(config);
+  click(title);
+  await settle();
+  check(calls.filter(call => call.type === "jira-open").length === beforePending, "wait for both confirmations before opening tabs");
+  finishCheck();
+  gate = null;
+  await settle();
+  check(calls.filter(call => call.type === "jira-open").length === beforePending + 1, "the pending click opens both tasks once checking completes");
+  document.__gitlabJiraCleanup();
+  states = ["found", "not-found"];
+  gate = new Promise(resolve => { finishCheck = resolve; });
+  const beforeSingle = calls.filter(call => call.type === "jira-open").length;
+  installJiraLinks(config);
+  click(title);
+  finishCheck();
+  gate = null;
+  await settle();
+  check(calls.filter(call => call.type === "jira-open").length === beforeSingle + 1, "a click during a pending single-match probe opens its tab without requiring a second click");
+  result.textContent = `PASS (${checks.length})\n${checks.join("\n")}`;
+} catch (error) {
+  result.textContent = `FAIL\n${error.stack}`;
+  throw error;
+} finally { document.__gitlabJiraCleanup?.(); }
+</script>

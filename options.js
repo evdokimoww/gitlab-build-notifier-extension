@@ -2,8 +2,11 @@ import {
   DEFAULT_BRANCH_MAPPINGS,
   parseBranchMappings,
 } from "./gitlab-promote.js";
+import { JIRA_DEFAULTS, normalizeBaseUrl, normalizeJiraUrls } from "./jira-api.js";
+import { bindAuthStatus } from "./auth-status.js";
 
 const defaults = {
+  ...JIRA_DEFAULTS,
   gitlabBaseUrl: "https://git-02.t1-group.ru",
   privateToken: "",
   stageName: "build",
@@ -27,6 +30,9 @@ async function load() {
   const s = await chrome.storage.local.get(defaults);
   $("gitlabBaseUrl").value = s.gitlabBaseUrl;
   $("privateToken").value = s.privateToken;
+  $("enableJiraLinks").checked = s.enableJiraLinks;
+  $("jiraUrl1").value = s.jiraBaseUrls[0];
+  $("jiraUrl2").value = s.jiraBaseUrls[1];
   $("stageName").value = s.stageName;
   $("pollIntervalSec").value = String(s.pollIntervalSec);
   $("treatSkippedAsSuccess").checked = s.treatSkippedAsSuccess;
@@ -48,14 +54,6 @@ function setStatus(text, ok) {
   p.className = ok === true ? "ok" : ok === false ? "err" : "";
 }
 
-async function ensureHostPermission(gitlabBaseUrl) {
-  const u = new URL(gitlabBaseUrl);
-  const originPat = `${u.origin}/*`;
-  const has = await chrome.permissions.contains({ origins: [originPat] });
-  if (has) return true;
-  return chrome.permissions.request({ origins: [originPat] });
-}
-
 $("themeToggle").addEventListener("change", async () => {
   const theme = $("themeToggle").checked ? "dark" : "light";
   document.documentElement.dataset.theme = theme;
@@ -69,20 +67,24 @@ $("themeToggle").addEventListener("change", async () => {
 
 $("save").addEventListener("click", async () => {
   setStatus("Сохранение…", undefined);
-  const gitlabBaseUrl =
-    $("gitlabBaseUrl").value.trim() || defaults.gitlabBaseUrl;
+  let gitlabBaseUrl;
+  let jiraBaseUrls;
+  const enableJiraLinks = $("enableJiraLinks").checked;
   try {
-    new URL(gitlabBaseUrl);
-  } catch {
-    setStatus("Некорректный URL", false);
+    gitlabBaseUrl = normalizeBaseUrl($("gitlabBaseUrl").value.trim() || defaults.gitlabBaseUrl);
+    jiraBaseUrls = normalizeJiraUrls([$("jiraUrl1").value, $("jiraUrl2").value]);
+  } catch (e) {
+    setStatus(e.message || "Некорректный URL", false);
     return;
   }
 
   try {
-    const okPerm = await ensureHostPermission(gitlabBaseUrl);
+    const hosts = enableJiraLinks ? [gitlabBaseUrl, ...jiraBaseUrls] : [gitlabBaseUrl];
+    const origins = [...new Set(hosts.map(url => `${new URL(url).origin}/*`))];
+    const okPerm = await chrome.permissions.request({ origins });
     if (!okPerm) {
       setStatus(
-        "Нужен доступ к хосту GitLab в запросе разрешений браузера",
+        "Для сохранения нужен доступ к GitLab и включённым Jira. Разрешите доступ в запросе браузера.",
         false,
       );
       return;
@@ -111,7 +113,9 @@ $("save").addEventListener("click", async () => {
 
   await chrome.storage.local.set({
     gitlabBaseUrl,
-    privateToken: $("privateToken").value,
+    privateToken: $("privateToken").value.trim(),
+    enableJiraLinks,
+    jiraBaseUrls,
     stageName: ($("stageName").value || "build").trim(),
     pollIntervalSec,
     treatSkippedAsSuccess: $("treatSkippedAsSuccess").checked,
@@ -123,6 +127,7 @@ $("save").addEventListener("click", async () => {
   });
 
   setStatus("Сохранено.", true);
+  refreshAuth();
 });
 
 $("resetNotified").addEventListener("click", async () => {
@@ -133,4 +138,5 @@ $("resetNotified").addEventListener("click", async () => {
   );
 });
 
+const refreshAuth = bindAuthStatus();
 load().catch((e) => setStatus(String(e), false));

@@ -129,28 +129,6 @@
         text-transform: uppercase;
       }
 
-      .live-state {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--ok);
-        font-family: var(--mono);
-        font-size: 8px;
-        font-weight: 750;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .live-state::before {
-        content: "";
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--ok);
-        box-shadow: 0 0 0 3px var(--ok-soft);
-        animation: pulse 1.8s ease-in-out infinite;
-      }
-
       .popup-body {
         padding: 15px 14px 14px;
       }
@@ -193,7 +171,7 @@
         position: absolute;
         top: 15px;
         left: 13px;
-        border: 2px solid var(--ok);
+        border: 2px solid var(--text-faint);
         border-radius: 50%;
       }
 
@@ -268,16 +246,6 @@
         background: var(--border-strong);
       }
 
-      @keyframes pulse {
-        0%,
-        100% {
-          box-shadow: 0 0 0 3px var(--ok-soft);
-        }
-        50% {
-          box-shadow: 0 0 0 5px transparent;
-        }
-      }
-
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #111318;
@@ -309,6 +277,7 @@
       }
     </style>
     <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="auth-status.css" />
     <script src="theme.js"></script>
   </head>
   <body>
@@ -321,7 +290,6 @@
             <span class="brand-product">GitLab CI control</span>
           </span>
         </div>
-        <span class="live-state">Active</span>
       </header>
 
       <div class="popup-body">
@@ -340,9 +308,16 @@
           <a id="opts" href="#" class="action">Настройки</a>
         </div>
 
+        <section aria-label="Статус авторизации">
+          <button type="button" id="connectSites" class="auth-refresh" hidden disabled>Подключить сайты</button>
+          <p id="connectionHint" class="auth-hint" aria-live="polite" hidden></p>
+          <div id="authStatus" class="auth-status" aria-live="polite"></div>
+          <button type="button" id="checkAuth" class="auth-refresh">Проверить доступ</button>
+        </section>
+
         <div class="popup-foot">Работает локально в браузере</div>
       </div>
     </main>
-    <script src="popup.js"></script>
+    <script src="popup.js" type="module"></script>
   </body>
 </html>
