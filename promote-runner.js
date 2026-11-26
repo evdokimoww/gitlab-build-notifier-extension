@@ -11,6 +11,7 @@ export const PROMOTE_SESSION_KEY = "promoteSession";
 
 /** @type {Map<string, AbortController>} */
 const runningAborts = new Map();
+let reconciliation = null;
 
 const STALE_RUNNING_SEC = 10 * 60;
 export const PROMOTE_KEEPALIVE_ALARM = "promote-keepalive";
@@ -23,6 +24,7 @@ export const PROMOTE_KEEPALIVE_ALARM = "promote-keepalive";
  *   logs: string[],
  *   buildImage: string,
  *   mrArg: string,
+ *   mergeRequests?: { project: string, iid: number, url: string }[],
  *   error: string,
  *   statusText: string,
  *   statusKind: string,
@@ -40,6 +42,7 @@ export function emptyPromoteSession(id = "") {
     logs: [],
     buildImage: "",
     mrArg: "",
+    mergeRequests: [],
     error: "",
     statusText: "",
     statusKind: "",
@@ -143,8 +146,11 @@ export async function setActivePromoteSession(id) {
   return state.items[id];
 }
 
-export async function dismissPromoteSession(id) {
+export async function dismissPromoteSession(id, { completedOnly = false } = {}) {
   const state = await loadSessionsState();
+  if (completedOnly && (state.items[id]?.status === "running" || runningAborts.has(id))) {
+    return state.activeId;
+  }
   runningAborts.get(id)?.abort();
   runningAborts.delete(id);
   delete state.items[id];
@@ -169,13 +175,31 @@ export async function reconcileStalePromoteSession() {
 }
 
 export async function reconcileStaleSessions() {
+  if (reconciliation) return reconciliation;
+  reconciliation = reconcileOrResumeSessions();
+  try { return await reconciliation; }
+  finally { reconciliation = null; }
+}
+
+async function reconcileOrResumeSessions() {
   const state = await loadSessionsState();
   let changed = false;
+  const resumable = [];
+  const settings = await chrome.storage.local.get({ gitlabBaseUrl: "", privateToken: "" });
 
   for (const [id, session] of Object.entries(state.items)) {
     if (session.status !== "running") continue;
     if (runningAborts.has(id)) continue;
 
+    if (session.form && session.gitlabBaseUrl) {
+      if (!settings.privateToken || !settings.gitlabBaseUrl) continue;
+      if (new URL(settings.gitlabBaseUrl).origin === new URL(session.gitlabBaseUrl).origin) {
+        const abort = new AbortController();
+        runningAborts.set(id, abort);
+        resumable.push({ id, session, abort });
+        continue;
+      }
+    }
     const ageSec = (Date.now() - session.updatedAt) / 1000;
     if (ageSec < STALE_RUNNING_SEC) continue;
 
@@ -194,6 +218,10 @@ export async function reconcileStaleSessions() {
   }
 
   if (changed) await saveSessionsState(state);
+  for (const { id, session, abort } of resumable) {
+    syncKeepaliveAlarm();
+    void executePromoteRun(id, session.form, settings, abort.signal, session.progress || {});
+  }
   return state;
 }
 
@@ -252,6 +280,10 @@ export async function previewPromotePlan(form, settings) {
  * @param {{ gitlabBaseUrl: string, privateToken: string }} settings
  */
 export async function acceptPromoteStart(form, settings) {
+  const mergeRequests = parseMrArgList(form.mrArg, form.mrBatch).map((ref) => ({
+    ...ref,
+    url: new URL(`/${ref.project}/-/merge_requests/${ref.iid}`, settings.gitlabBaseUrl).href,
+  }));
   await reconcileStaleSessions();
 
   const sessionId = createSessionId();
@@ -262,6 +294,10 @@ export async function acceptPromoteStart(form, settings) {
     status: "running",
     logs: ["Старт…"],
     mrArg: form.sessionLabel || form.mrArg,
+    mergeRequests,
+    form: structuredClone(form),
+    gitlabBaseUrl: settings.gitlabBaseUrl,
+    progress: {},
     statusText: "Выполняется…",
     startedAt: Date.now(),
     updatedAt: Date.now(),
@@ -343,19 +379,42 @@ async function notifyPromoteConflict(sessionId, mr, message, settings, projectPa
   }
 }
 
-async function executePromoteRun(sessionId, form, settings, signal) {
+async function executePromoteRun(sessionId, form, settings, signal, progress = {}) {
   const projectPath = projectPathFromForm(form);
   const label = form.sessionLabel || form.mrArg || sessionId;
+  // Build and cherry-pick now run concurrently. Serialize storage read/modify/write
+  // so a heartbeat or log cannot overwrite the freshly published master image.
+  let updateQueue = Promise.resolve();
+  const enqueueUpdate = (update) => {
+    const result = updateQueue.then(update);
+    updateQueue = result.catch(() => {});
+    return result;
+  };
 
+  const pipelineStates = new Map();
   try {
     const result = await runPromote(settings.gitlabBaseUrl, settings.privateToken, form, {
       signal,
-      log: (line) => appendSessionLog(sessionId, line),
-      heartbeat: () => patchSessionById(sessionId, {}),
-      onBuildImage: (image) => patchSessionById(sessionId, { buildImage: image }),
+      progress,
+      onProgress: (value) => enqueueUpdate(() => patchSessionById(sessionId, { progress: value })),
+      onPipelineState: (value) => {
+        pipelineStates.set(value.label, value);
+        const waiting = [...pipelineStates.values()].filter(p => p.waitingForRetry);
+        return enqueueUpdate(() => patchSessionById(sessionId, {
+          pipelines: Object.fromEntries(pipelineStates),
+          statusText: waiting.length
+            ? `Ждём ручного перезапуска в GitLab: ${waiting.map(p => `${p.label} #${p.pipelineId} (${p.status})`).join(", ")}`
+            : "Выполняется…",
+          statusKind: waiting.length ? "warn" : "",
+        }));
+      },
+      log: (line) => enqueueUpdate(() => appendSessionLog(sessionId, line)),
+      heartbeat: () => enqueueUpdate(() => patchSessionById(sessionId, {})),
+      onBuildImage: (image) => enqueueUpdate(() => patchSessionById(sessionId, { buildImage: image })),
       onConflict: (mr, message) =>
         notifyPromoteConflict(sessionId, mr, message, settings, projectPath),
     });
+    await updateQueue;
     if (result.buildImage) {
       await patchSessionById(sessionId, { buildImage: result.buildImage });
     }
@@ -377,6 +436,7 @@ async function executePromoteRun(sessionId, form, settings, signal) {
       projectPath,
     }).catch((e) => console.warn("[gitlab-notifier] promote success notify:", e));
   } catch (e) {
+    await updateQueue;
     if (e instanceof DOMException && e.name === "AbortError") {
       await appendSessionLog(sessionId, "--- отменено пользователем ---");
       await patchSessionById(sessionId, {

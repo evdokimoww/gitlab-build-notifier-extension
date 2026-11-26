@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
 
 /** @type {string | null} */
 let activeSessionId = null;
+let clearingSessions = false;
 
 function $(id) {
   const el = document.getElementById(id);
@@ -92,8 +93,27 @@ function setBuildImageReady(ready, image = "") {
 function clearDetailView() {
   setLogText("");
   setBuildImageReady(false);
+  renderBuildMergeRequests(null);
   $("newMr").hidden = true;
   setActiveSessionControls(null);
+}
+
+function renderBuildMergeRequests(session) {
+  const list = $("buildMergeRequests");
+  list.replaceChildren();
+  for (const mr of session?.mergeRequests || []) {
+    const url = new URL(mr.url);
+    if (!["https:", "http:"].includes(url.protocol)) continue;
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `${mr.project}!${mr.iid}`;
+    item.appendChild(link);
+    list.appendChild(item);
+  }
+  $("buildMergeRequestsBlock").hidden = !list.children.length;
 }
 
 /**
@@ -106,6 +126,7 @@ function applySession(session) {
   }
 
   activeSessionId = session.id;
+  renderBuildMergeRequests(session);
   setLogText((session.logs || []).join("\n"));
   setActiveSessionControls(session);
 
@@ -129,6 +150,8 @@ function applySession(session) {
 function renderSessionTabs(sessions, highlightedId) {
   const bar = $("sessionBar");
   bar.replaceChildren();
+  $("sessionToolbar").hidden = !sessions.length;
+  $("clearSessions").disabled = clearingSessions || !sessions.some((s) => s.status !== "running");
 
   if (!sessions.length) {
     bar.hidden = true;
@@ -253,6 +276,28 @@ async function dismissSession(sessionId) {
   else await applyInitialSessionView(list.sessions || [], list.activeId);
 
   await restoreReadyStatus();
+}
+
+async function clearCompletedSessions() {
+  if (clearingSessions) return;
+  clearingSessions = true;
+  $("clearSessions").disabled = true;
+  try {
+    const { sessions = [] } = await fetchSessions();
+    for (const session of sessions) {
+      if (session.status === "running") continue;
+      const res = await chrome.runtime.sendMessage({
+        type: "promote-dismiss",
+        sessionId: session.id,
+        completedOnly: true,
+      });
+      if (!res?.ok) throw new Error(res?.error || "Не удалось очистить сессии");
+    }
+  } finally {
+    clearingSessions = false;
+    await syncSessionsFromBackground();
+    await restoreReadyStatus();
+  }
 }
 
 async function restoreReadyStatus() {
@@ -411,6 +456,10 @@ function bindStorageSync() {
 }
 
 function bindUi() {
+  $("clearSessions").addEventListener("click", () => {
+    clearCompletedSessions().catch((e) => setStatus(String(e), "err"));
+  });
+
   $("openOptions").addEventListener("click", (e) => {
     e.preventDefault();
     chrome.runtime.openOptionsPage();
@@ -517,6 +566,12 @@ let pendingPlanForm = null;
  */
 function stepKindLabel(step) {
   switch (step.kind) {
+    case "guarantee-merge":
+      return "merge в мастер";
+    case "cherry-pick":
+      return "cherry-pick";
+    case "backport":
+      return "merge в develop";
     case "feature":
       return "feature → develop";
     case "develop-build":
@@ -543,6 +598,7 @@ function showPlanDialog(plan, form) {
     ? ` · production: <code>${escapeHtml(plan.productionBranch)}</code>`
     : "";
   meta.innerHTML =
+    (plan.flow === "guarantee" ? "Флоу: <strong>Гарантия</strong> · " : "") +
     `Проект: <code>${escapeHtml(plan.project)}</code>` +
     ` · develop: <code>${escapeHtml(plan.developBranch)}</code>${prod}`;
 
@@ -551,8 +607,8 @@ function showPlanDialog(plan, form) {
   /** @type {Array<[string, boolean]>} */
   const flagList = [
     ["dry run", plan.dryRun],
-    ["только feature → develop", plan.stopAfterFeature],
-    ["стоп после создания promote MR", plan.stopAfterPromoteMr],
+    [plan.flow === "guarantee" ? "только merge в мастер" : "только feature → develop", plan.stopAfterFeature],
+    [plan.flow === "guarantee" ? "стоп после создания cherry-pick MR" : "стоп после создания promote MR", plan.stopAfterPromoteMr],
     ["без build-образа", plan.skipBuildImage],
     ["ждать pipeline feature", plan.waitFeaturePipeline],
   ];
@@ -592,7 +648,7 @@ function showPlanDialog(plan, form) {
     if (step.sourceBranch || step.targetBranch) {
       const flow = document.createElement("div");
       flow.className = "step-flow";
-      if (step.kind === "build") {
+      if (!step.sourceBranch) {
         flow.textContent = step.targetBranch || "";
       } else {
         const src = document.createElement("span");

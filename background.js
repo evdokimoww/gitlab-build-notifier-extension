@@ -499,7 +499,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "promote-dismiss") {
-    dismissPromoteSession(msg.sessionId)
+    dismissPromoteSession(msg.sessionId, { completedOnly: msg.completedOnly === true })
       .then((activeId) => sendResponse({ ok: true, activeId }))
       .catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true;

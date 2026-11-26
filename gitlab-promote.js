@@ -6,6 +6,11 @@
 
 import {
   apiRoot,
+  createBranch,
+  cherryPickCommit,
+  getCommit,
+  listBackportMergeRequests,
+  listMrCommits,
   branchExists,
   createMergeRequest,
   createMrPipeline,
@@ -193,32 +198,16 @@ function pipelinesAfter(pipelines, afterPipelineId) {
 }
 
 /**
- * Среди кандидатов предпочитаем source=push (после merge), затем больший id.
+ * Follow the newest non-skipped pipeline on the newest commit.
+ * A newer failed attempt must not be hidden by an earlier success.
  * @param {Record<string, unknown>[]} pipelines
  */
-function pickPreferredPipeline(pipelines) {
-  if (!pipelines.length) return null;
-  const pushes = pipelines.filter((p) => String(p.source || "") === "push");
-  const pool = pushes.length ? pushes : pipelines;
-  return pool.reduce((a, b) => (Number(a.id) > Number(b.id) ? a : b));
-}
-
-/**
- * Выбирает pipeline для ожидания: success > active > newest terminal.
- * Новый skipped не перебивает более старый running/success.
- * При равном статусе предпочитаем source=push (CI часто skip'ает api).
- * @param {Record<string, unknown>[]} pipelines newest first
- */
 function selectPipelineForWait(pipelines) {
-  const successes = pipelines.filter((p) => String(p.status) === "success");
-  if (successes.length) return pickPreferredPipeline(successes);
-  const actives = pipelines.filter((p) => PIPELINE_ACTIVE.has(String(p.status)));
-  if (actives.length) return pickPreferredPipeline(actives);
-  const hardFails = pipelines.filter((p) =>
-    ["failed", "canceled"].includes(String(p.status))
-  );
-  if (hardFails.length) return pickPreferredPipeline(hardFails);
-  return pipelines[0];
+  const newest = pipelines.reduce((a, b) => Number(a.id) > Number(b.id) ? a : b, pipelines[0]);
+  if (newest?.sha) pipelines = pipelines.filter(p => p.sha === newest.sha);
+  const candidates = pipelines.filter(p => String(p.status) !== "skipped");
+  return (candidates.length ? candidates : pipelines)
+    .reduce((a, b) => Number(a.id) > Number(b.id) ? a : b);
 }
 
 const MR_URL_RE =
@@ -248,7 +237,7 @@ develop-* → master-*, main-*
 /**
  * @typedef {{ project: string, iid: number }} MrRef
  * @typedef {(line: string) => void} LogFn
- * @typedef {{ signal?: AbortSignal, log?: LogFn, heartbeat?: () => void, onBuildImage?: (image: string) => void, onConflict?: (mr: Record<string, unknown>, message: string) => void }} PromoteHooks
+ * @typedef {{ progress?: Record<string, unknown>, onProgress?: (progress: Record<string, unknown>) => Promise<void>, onPipelineState?: (state: Record<string, unknown>) => Promise<void>, signal?: AbortSignal, log?: LogFn, heartbeat?: () => void, onBuildImage?: (image: string) => void, onConflict?: (mr: Record<string, unknown>, message: string) => void }} PromoteHooks
  * @typedef {{ staging: string, production: string[] }} BranchMappingRule
  * @typedef {{ rule: BranchMappingRule, captures: string[], candidates: string[] }} BranchMappingMatch
  */
@@ -429,6 +418,21 @@ export function matchBranchMapping(stagingBranch, rules) {
         .map((r) => r.staging)
         .join(", ")})`
   );
+}
+
+/** Reverse the configured masks, preserving path prefixes and suffixes. */
+export function guaranteeDevelopBranch(targetBranch, rules = parseBranchMappings()) {
+  const candidates = new Set();
+  for (const rule of rules) {
+    for (const template of rule.production) {
+      const match = maskToRegExp(template).exec(targetBranch);
+      if (match) candidates.add(expandMask(rule.staging, match.slice(1)));
+    }
+  }
+  if (candidates.size > 1) {
+    throw new Error(`Для ${targetBranch} неоднозначная develop-ветка: ${[...candidates].join(", ")}. Уточните маски в настройках.`);
+  }
+  return [...candidates][0] || null;
 }
 
 /**
@@ -670,8 +674,9 @@ async function ensureMrPipelineStarted(
 
   const sourceBranch = String(mr.source_branch || "");
   checkAborted(signal);
-  const pipelines = await listMrPipelines(apiBase, token, project, iid);
-  if (hasSuccessOrActivePipeline(pipelines)) {
+  const pipelines = (await listMrPipelines(apiBase, token, project, iid))
+    .filter(p => !mr.sha || p.sha === mr.sha);
+  if (hasSuccessOrActivePipeline(pipelines) || pipelines.some(p => ["failed", "canceled"].includes(String(p.status)) && (!mr.sha || p.sha === mr.sha))) {
     log(`MR !${iid}: pipeline уже есть на MR`);
     logPipelinesSnapshot(log, `MR !${iid}`, pipelines);
     return null;
@@ -680,10 +685,10 @@ async function ensureMrPipelineStarted(
   let branchPipelines = [];
   if (sourceBranch) {
     checkAborted(signal);
-    branchPipelines = await listPipelinesForRef(apiBase, token, project, sourceBranch, {
+    branchPipelines = (await listPipelinesForRef(apiBase, token, project, sourceBranch, {
       perPage: 10,
-    });
-    if (hasSuccessOrActivePipeline(branchPipelines)) {
+    })).filter(p => !mr.sha || p.sha === mr.sha);
+    if (hasSuccessOrActivePipeline(branchPipelines) || branchPipelines.some(p => ["failed", "canceled"].includes(String(p.status)) && (!mr.sha || p.sha === mr.sha))) {
       log(`MR !${iid}: pipeline уже есть на ветке ${JSON.stringify(sourceBranch)}`);
       logPipelinesSnapshot(log, `MR !${iid}`, pipelines);
       logPipelinesSnapshot(log, `ветка ${sourceBranch}`, branchPipelines);
@@ -865,6 +870,7 @@ async function waitPipelineLoop(
      * @type {((pipeline: Record<string, unknown>) => Promise<void>) | null | undefined}
      */
     onManualPipeline = null,
+    onPipelineState,
   }
 ) {
   const ctx = { log, heartbeat };
@@ -872,6 +878,7 @@ async function waitPipelineLoop(
   const terminalBad = new Set(["failed", "canceled", "skipped"]);
   const deadline = Date.now() + timeoutSec * 1000;
   let seen = null;
+  let seenStatus = null;
   let triedStart = false;
   let skippedRetried = false;
   let skippedRecovered = false;
@@ -888,6 +895,7 @@ async function waitPipelineLoop(
     checkAborted(signal);
     pulseWait(ctx);
     const pipelines = await fetchPipelines();
+    checkAborted(signal);
     lastPipelines = pipelines;
     const relevant = pipelinesAfter(pipelines, afterPipelineId);
     if (!relevant.length) {
@@ -923,7 +931,7 @@ async function waitPipelineLoop(
       await sleep(pollSec * 1000, signal);
       continue;
     }
-    const latest = relevant[0];
+    const latest = relevant.reduce((a, b) => Number(a.id) > Number(b.id) ? a : b);
     const candidate = selectPipelineForWait(relevant);
     const pid = Number(candidate.id);
     const status = String(candidate.status);
@@ -931,8 +939,12 @@ async function waitPipelineLoop(
       log(`  ${label}: игнорируем #${latest.id} (skipped), ждём #${pid} (${status})`);
       logPipelineSelection(log, label, relevant, candidate, latest);
     }
-    if (pid !== seen) {
+    const statusChanged = pid !== seen || status !== seenStatus;
+    if (statusChanged) {
       seen = pid;
+      seenStatus = status;
+      await onPipelineState?.({ label, pipelineId: pid, status, sha: candidate.sha,
+        waitingForRetry: status === "failed" || status === "canceled" });
       waitStartedAt = Date.now();
       lastProgressLogAt = waitStartedAt;
       log(`  ${label} #${pid}: ${status}`);
@@ -949,6 +961,13 @@ async function waitPipelineLoop(
       });
     }
     if (terminalOk.has(status)) return pid;
+    if (status === "failed" || status === "canceled") {
+      if (statusChanged) {
+        log(`  ${label} #${pid}: ${status}. Ждём ручного перезапуска в GitLab…`);
+      }
+      await sleep(pollSec * 1000, signal);
+      continue;
+    }
     if (status === "manual" && onManualPipeline && !manualPlayed) {
       manualPlayed = true;
       log(`  ${label} #${pid}: status=manual — запускаем manual jobs…`);
@@ -1120,7 +1139,7 @@ async function waitBranchPipeline(
   project,
   ref,
   afterPipelineId,
-  { timeoutSec, pollSec, log, signal, dryRun, heartbeat }
+  { timeoutSec, pollSec, log, signal, dryRun, heartbeat, onPipelineState }
 ) {
   const label = `branch pipeline ${ref}`;
   const ensurePipeline = dryRun
@@ -1188,6 +1207,7 @@ async function waitBranchPipeline(
         label,
         signal,
         heartbeat,
+        onPipelineState,
         afterPipelineId,
         createGraceMs: dryRun ? 0 : BRANCH_PIPELINE_PUSH_GRACE_MS,
         skippedGraceMs: dryRun ? 0 : BRANCH_PIPELINE_SKIPPED_GRACE_MS,
@@ -1448,7 +1468,9 @@ async function loadAndValidateBatch(apiBase, token, refs, rules, signal) {
   for (const ref of refs) {
     checkAborted(signal);
     const mr = await getMergeRequest(apiBase, token, ref.project, ref.iid);
-    requireStagingTarget(String(mr.target_branch), rules);
+    if (!guaranteeDevelopBranch(String(mr.target_branch), rules)) {
+      requireStagingTarget(String(mr.target_branch), rules);
+    }
     mrs.push({ ref, mr });
   }
 
@@ -1464,7 +1486,7 @@ async function loadAndValidateBatch(apiBase, token, refs, rules, signal) {
     const target = String(mrs[i].mr.target_branch);
     if (target !== developBranch) {
       throw new Error(
-        `MR !${refs[i].iid} target ${target} ≠ ${developBranch} — все MR должны идти в одну staging-ветку`
+        `MR !${refs[i].iid} target ${target} ≠ ${developBranch} — все MR должны идти в одну целевую ветку`
       );
     }
   }
@@ -1490,7 +1512,7 @@ async function loadAndValidateBatch(apiBase, token, refs, rules, signal) {
 
 /**
  * @typedef {{
- *   kind: 'feature' | 'develop-build' | 'promote-create' | 'promote' | 'build',
+ *   kind: 'feature' | 'develop-build' | 'promote-create' | 'promote' | 'build' | 'guarantee-merge' | 'cherry-pick' | 'backport',
  *   label: string,
  *   sourceBranch?: string,
  *   targetBranch?: string,
@@ -1502,6 +1524,7 @@ async function loadAndValidateBatch(apiBase, token, refs, rules, signal) {
  * }} PromotePlanStep
  *
  * @typedef {{
+ *   flow?: 'promote' | 'guarantee',
  *   project: string,
  *   developBranch: string,
  *   productionBranch: string | null,
@@ -1543,6 +1566,35 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
   checkAborted(signal);
   const batch = await loadAndValidateBatch(apiBase, token, refs, branchRules, signal);
   const { project, developBranch, mrs } = batch;
+  const guaranteeDevelop = guaranteeDevelopBranch(developBranch, branchRules);
+  if (guaranteeDevelop) {
+    validateGuaranteeOverride(options, developBranch);
+    checkAborted(signal);
+    if (!dryRun && !(await branchExists(apiBase, token, project, guaranteeDevelop))) {
+      throw new Error(`Ветка ${guaranteeDevelop} не найдена в ${project}`);
+    }
+    const steps = mrs.map(({ ref, mr }) => ({
+      kind: "guarantee-merge",
+      label: `Гарантия: merge !${ref.iid}`,
+      sourceBranch: String(mr.source_branch), targetBranch: developBranch,
+      mrIid: ref.iid, mrTitle: String(mr.title || ""),
+      note: mr.state === "merged" ? "Уже влит, merge пропустится" :
+        waitFeaturePipeline ? "Перед merge дождаться pipeline исходного MR" : undefined,
+    }));
+    if (!stopAfterFeature) {
+      if (!skipBuildImage) steps.push({ kind: "build", label: "Сборка мастера", targetBranch: developBranch,
+        note: `Выдать build-образ ${developBranch}. Выполняется параллельно с переносом в ${guaranteeDevelop}` });
+      for (const { ref } of mrs) {
+        steps.push({ kind: "cherry-pick", label: `Cherry-pick !${ref.iid}`,
+          sourceBranch: developBranch, targetBranch: guaranteeDevelop,
+          note: "После merge в мастер перенести доработку в отдельную ветку от develop и создать MR" });
+        if (!stopAfterPromoteMr) steps.push({ kind: "backport", label: `Влить доработку !${ref.iid} в develop`,
+          targetBranch: guaranteeDevelop, note: "Только после успешного pipeline cherry-pick MR" });
+      }
+    }
+    return { flow: "guarantee", project, developBranch: guaranteeDevelop, productionBranch: developBranch,
+      dryRun, stopAfterFeature, stopAfterPromoteMr, skipBuildImage, waitFeaturePipeline, buildStage, steps };
+  }
 
   /** @type {string | null} */
   let productionBranch = null;
@@ -1638,6 +1690,16 @@ export async function planPromote(apiBaseUrl, token, options, hooks = {}) {
   };
 }
 
+/** Persist before moving to the next remote operation; never store credentials here. */
+async function promoteCheckpoint(hooks, key, create) {
+  const progress = hooks.progress ||= {};
+  if (Object.hasOwn(progress, key)) return progress[key];
+  const value = await create();
+  progress[key] = value;
+  await hooks.onProgress?.({ ...progress });
+  return value;
+}
+
 /**
  * @param {string} apiBaseUrl
  * @param {string} token
@@ -1677,6 +1739,12 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   checkAborted(signal);
   const batch = await loadAndValidateBatch(apiBase, token, refs, branchRules, signal);
   const { project, developBranch, mrs } = batch;
+  const guaranteeDevelop = guaranteeDevelopBranch(developBranch, branchRules);
+  if (guaranteeDevelop) {
+    validateGuaranteeOverride(options, developBranch);
+    return runGuarantee(apiBase, token, batch, guaranteeDevelop, options, hooks);
+  }
+
   let featureMr = mrs[mrs.length - 1].mr;
 
   for (const { ref, mr } of mrs) {
@@ -1707,32 +1775,13 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   log(`Production: ${productionBranch}`);
   if (dryRun) log("--- dry run ---");
 
-  /** Baseline develop pipeline до merge feature — ждём новый push-pipeline. */
-  let lastDevelopPipelineBeforeMerge = null;
+  const lastDevelopPipelineBeforeMerge = dryRun ? null : await promoteCheckpoint(hooks,
+    "developBaseline", async () => {
+      if (mrs.every(({ mr }) => mr.state === "merged")) return null;
+      const pipelines = await listPipelinesForRef(apiBase, token, project, developBranch, { perPage: 1 });
+      return pipelines.length ? Number(pipelines[0].id) : null;
+    });
   let mergedAnyFeature = false;
-  if (!dryRun) {
-    checkAborted(signal);
-    const developPipelines = await listPipelinesForRef(
-      apiBase,
-      token,
-      project,
-      developBranch,
-      { perPage: 1 }
-    );
-    if (developPipelines.length) {
-      lastDevelopPipelineBeforeMerge = Number(developPipelines[0].id);
-    }
-    log(
-      `  baseline develop pipeline: ${
-        lastDevelopPipelineBeforeMerge != null
-          ? `#${lastDevelopPipelineBeforeMerge}`
-          : "(нет — ждём любой новый)"
-      }`
-    );
-    if (developPipelines.length) {
-      logPipelinesSnapshot(log, developBranch, developPipelines);
-    }
-  }
 
   for (let i = 0; i < mrs.length; i++) {
     const { ref: mrRef } = mrs[i];
@@ -1775,10 +1824,10 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   }
 
   // До promote в production develop с влитыми изменениями обязан собраться успешно.
-  if (!dryRun) {
+  if (!dryRun && !hooks.progress?.promoteMrIid) {
     // Если feature уже были в develop — принимаем текущий success; иначе ждём
     // pipeline после baseline (push от merge).
-    const afterDevelopId = mergedAnyFeature ? lastDevelopPipelineBeforeMerge : null;
+    const afterDevelopId = lastDevelopPipelineBeforeMerge;
     log(
       `Ожидание успешного pipeline на ${JSON.stringify(developBranch)} ` +
         `перед promote в ${JSON.stringify(productionBranch)}…` +
@@ -1792,26 +1841,35 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
       project,
       developBranch,
       afterDevelopId,
-      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun }
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun, onPipelineState: hooks.onPipelineState }
     );
     log(
       `  develop pipeline готов: #${developPipelineId} — можно создавать/мержить promote MR`
     );
-  } else {
+  } else if (dryRun) {
     log(
       `Dry run: пропуск ожидания pipeline ${JSON.stringify(developBranch)} перед promote`
     );
   }
 
   const pipelineCtx = { mrApiUnsupported: false, emptyPipelineOk: true };
-  let promoteMr = await getOrCreatePromoteMr(apiBase, token, project, {
-    developBranch,
-    productionBranch,
-    dryRun,
-    log,
-    signal,
-    pipelineCtx,
-  });
+  let promoteMr;
+  if (dryRun) {
+    promoteMr = await getOrCreatePromoteMr(apiBase, token, project, {
+      developBranch, productionBranch, dryRun, log, signal, pipelineCtx,
+    });
+  } else {
+    const iid = await promoteCheckpoint(hooks, "promoteMrIid", async () => {
+      const mr = await getOrCreatePromoteMr(apiBase, token, project, {
+        developBranch, productionBranch, dryRun, log, signal, pipelineCtx,
+      });
+      return Number(mr.iid);
+    });
+    promoteMr = await getMergeRequest(apiBase, token, project, iid);
+    if (promoteMr.source_branch !== developBranch || promoteMr.target_branch !== productionBranch) {
+      throw new Error(`Ветки promote MR !${iid} изменились. Повторите анализ.`);
+    }
+  }
 
   if (!dryRun) {
     checkAborted(signal);
@@ -1824,19 +1882,13 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     return {};
   }
 
-  let lastPipelineBeforeMerge = null;
-  if (!dryRun) {
-    checkAborted(signal);
-    const pipelines = await listPipelinesForRef(apiBase, token, project, productionBranch, {
-      perPage: 1,
+  const lastPipelineBeforeMerge = dryRun ? null : await promoteCheckpoint(hooks,
+    "productionBaseline", async () => {
+      const pipelines = await listPipelinesForRef(apiBase, token, project, productionBranch, { perPage: 1 });
+      return pipelines.length ? Number(pipelines[0].id) : null;
     });
-    if (pipelines.length) lastPipelineBeforeMerge = Number(pipelines[0].id);
-    log(
-      `  baseline production pipeline: ${lastPipelineBeforeMerge != null ? `#${lastPipelineBeforeMerge}` : "(нет — ждём любой новый)"}`
-    );
-    if (pipelines.length) {
-      logPipelinesSnapshot(log, productionBranch, pipelines);
-    }
+  if (!dryRun && promoteMr.state !== "merged") {
+    checkAborted(signal);
 
     const ensurePromotePipeline = () =>
       ensureMrPipelineStarted(apiBase, token, project, promoteMr, {
@@ -1853,12 +1905,17 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
       log("  CI не требует pipeline для promote MR (mrPipelineEmpty), продолжаем…");
     } else {
       const promotePipelineId = await waitPipelineLoop(
-        () => listMrPipelines(apiBase, token, project, Number(promoteMr.iid)),
+        async () => {
+          const mrPipelines = await listMrPipelines(apiBase, token, project, Number(promoteMr.iid));
+          const branchPipelines = await listPipelinesForRef(apiBase, token, project, developBranch);
+          return [...mrPipelines, ...branchPipelines].filter(p => !promoteMr.sha || p.sha === promoteMr.sha);
+        },
         {
           timeoutSec: pipelineTimeout,
           pollSec,
           log,
           heartbeat,
+          onPipelineState: hooks.onPipelineState,
           label: `MR pipeline !${promoteMr.iid}`,
           signal,
           onNoPipeline: ensurePromotePipeline,
@@ -1875,6 +1932,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
   promoteMr = await mergeIfNeeded(apiBase, token, project, promoteMr, {
     dryRun,
     label: "Promote",
+    verifiedSha: dryRun ? null : promoteMr.sha,
     waitPipelineBefore: false,
     pipelineTimeout,
     pollSec,
@@ -1898,7 +1956,7 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
       project,
       productionBranch,
       lastPipelineBeforeMerge,
-      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun }
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun, onPipelineState: hooks.onPipelineState }
     );
     buildImage = await extractBuildImage(
       apiBase,
@@ -1932,9 +1990,10 @@ async function mergeIfNeeded(
   token,
   project,
   mr,
-  { dryRun, label, waitPipelineBefore, pipelineTimeout, pollSec, log, heartbeat, signal, hooks }
+  { dryRun, label, waitPipelineBefore, pipelineTimeout, pollSec, log, heartbeat, signal, hooks, strictPipeline = false, verifiedSha = null }
 ) {
   const iid = Number(mr.iid);
+  const expectedTarget = mr.target_branch;
   if (String(mr.state) === "merged") {
     log(`${label}: уже смержен (!${iid})`);
     return mr;
@@ -1943,6 +2002,12 @@ async function mergeIfNeeded(
   if (!dryRun) {
     mr = await refreshMergeRequest(apiBase, token, project, iid, signal);
   }
+  if (mr.state === "merged") return mr;
+  if (verifiedSha && mr.sha !== verifiedSha) throw new Error(`Коммит MR !${iid} изменился после проверки pipeline. Повторите анализ.`);
+  if (strictPipeline && mr.target_branch !== expectedTarget) {
+    throw new Error(`Target MR !${iid} изменился. Повторите анализ.`);
+  }
+  if (strictPipeline && !mr.sha) throw new Error(`MR !${iid}: отсутствует SHA для проверки pipeline`);
   ensureMergeable(mr, label, hooks, log);
 
   if (waitPipelineBefore) {
@@ -1957,11 +2022,16 @@ async function mergeIfNeeded(
           pipelineCtx,
         });
       await ensurePipeline();
-      await waitPipelineLoop(() => listMrPipelines(apiBase, token, project, iid), {
+      await waitPipelineLoop(async () => {
+        const mrPipelines = await listMrPipelines(apiBase, token, project, iid);
+        const branchPipelines = await listPipelinesForRef(apiBase, token, project, String(mr.source_branch));
+        return [...mrPipelines, ...branchPipelines].filter(p => !mr.sha || p.sha === mr.sha);
+      }, {
         timeoutSec: pipelineTimeout,
         pollSec,
         log,
         heartbeat,
+        onPipelineState: hooks.onPipelineState,
         label: `MR pipeline !${iid}`,
         signal,
         onNoPipeline: ensurePipeline,
@@ -1978,7 +2048,7 @@ async function mergeIfNeeded(
 
   checkAborted(signal);
   try {
-    return await mergeMergeRequest(apiBase, token, project, iid);
+    return await mergeMergeRequest(apiBase, token, project, iid, strictPipeline || waitPipelineBefore || verifiedSha ? String(mr.sha) : undefined);
   } catch (err) {
     const msg = formatError(err);
     checkAborted(signal);
@@ -2038,4 +2108,136 @@ async function getOrCreatePromoteMr(
     pipelineCtx: pipelineCtx || {},
   });
   return mr;
+}
+
+function validateGuaranteeOverride(options, productionBranch) {
+  if (options.productionBranch?.trim() && options.productionBranch.trim() !== productionBranch) {
+    throw new Error(`Флоу «Гарантия» использует target исходного MR: ${productionBranch}. Очистите поле production-ветки.`);
+  }
+}
+
+/** Pick the complete MR changes, including squash and fast-forward merges. */
+async function guaranteeCommits(apiBase, token, project, mr, signal) {
+  checkAborted(signal);
+  if (mr.squash_commit_sha) return [String(mr.squash_commit_sha)];
+  if (mr.merge_commit_sha) {
+    const commit = await getCommit(apiBase, token, project, String(mr.merge_commit_sha));
+    if (commit.parent_ids?.length > 1) return [String(mr.merge_commit_sha)];
+  }
+  checkAborted(signal);
+  const commits = await listMrCommits(apiBase, token, project, Number(mr.iid));
+  if (!commits.length) throw new Error(`Не найдены коммиты влитого MR !${mr.iid}`);
+  // Follow the first-parent chain: a merge commit already contains its side
+  // branch changes, so picking those commits again would duplicate the patch.
+  const byId = new Map(commits.map(c => [c.id, c]));
+  let commit = byId.get(mr.merge_commit_sha || mr.sha);
+  if (!commit) throw new Error(`Не найден итоговый коммит MR !${mr.iid} для cherry-pick`);
+  const ordered = [];
+  while (commit) {
+    ordered.push(String(commit.id));
+    commit = byId.get(commit.parent_ids?.[0]);
+  }
+  return ordered.reverse();
+}
+
+async function runGuarantee(apiBase, token, batch, developBranch, options, hooks) {
+  const { project, developBranch: productionBranch, mrs } = batch;
+  const { signal, log = () => {}, heartbeat } = hooks;
+  const dryRun = Boolean(options.dryRun);
+  const pipelineTimeout = options.pipelineTimeoutSec ?? 7200;
+  const pollSec = options.pollIntervalSec ?? 20;
+  const buildStage = (options.buildStage || "build").trim();
+  log(`Флоу: Гарантия. ${productionBranch} → cherry-pick → ${developBranch}`);
+  checkAborted(signal);
+  if (!dryRun && !(await branchExists(apiBase, token, project, developBranch))) {
+    throw new Error(`Ветка ${developBranch} не найдена в ${project}`);
+  }
+  const baseline = dryRun || options.skipBuildImage || options.stopAfterFeature ? null
+    : await promoteCheckpoint(hooks, "guaranteeBaseline", async () => {
+      if (mrs.every(({ mr }) => mr.state === "merged")) return null;
+      const pipelines = await listPipelinesForRef(apiBase, token, project, productionBranch, { perPage: 1 });
+      return pipelines.length ? Number(pipelines[0].id) : null;
+    });
+  const mergedMrs = [];
+  for (const { ref } of mrs) {
+    let mr = await refreshMergeRequest(apiBase, token, project, ref.iid, signal);
+    if (mr.target_branch !== productionBranch) throw new Error(`Target MR !${ref.iid} изменился. Повторите анализ.`);
+    mr = await mergeIfNeeded(apiBase, token, project, mr, {
+      dryRun, label: "Гарантия", waitPipelineBefore: Boolean(options.waitFeaturePipeline),
+      pipelineTimeout, pollSec, log, heartbeat, signal, hooks,
+    });
+    if (!dryRun) {
+      mr = await refreshMergeRequest(apiBase, token, project, ref.iid, signal);
+      if (mr.state !== "merged") throw new Error(`MR !${ref.iid} ещё не влит в ${productionBranch}`);
+    }
+    mergedMrs.push(mr);
+  }
+  if (options.stopAfterFeature) {
+    log(`Остановка после merge в ${productionBranch}.`);
+    return {};
+  }
+
+  const build = async () => {
+    if (dryRun || options.skipBuildImage) {
+      log(`Сборка ${productionBranch}: ожидание образа пропущено.`);
+      return undefined;
+    }
+    const pipelineId = await waitBranchPipeline(apiBase, token, project, productionBranch,
+      baseline,
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun, onPipelineState: hooks.onPipelineState });
+    const image = await extractBuildImage(apiBase, token, project, pipelineId, buildStage, log, signal);
+    log(`Build image: ${image}`);
+    await hooks.onBuildImage?.(image);
+    return image;
+  };
+  const backport = async () => {
+    for (const mr of mergedMrs) {
+      checkAborted(signal);
+      const sourceBranch = `guarantee/mr-${mr.iid}-${String(mr.squash_commit_sha || mr.merge_commit_sha || mr.sha).slice(0, 12)}`;
+      log(`Гарантия !${mr.iid}: cherry-pick в ${sourceBranch} → ${developBranch}`);
+      if (dryRun) {
+        log(`Dry run: создать ветку от ${developBranch}, cherry-pick, создать MR${options.stopAfterPromoteMr ? "" : ", дождаться успешного pipeline и влить"}.`);
+        continue;
+      }
+      const existing = await listBackportMergeRequests(apiBase, token, project, sourceBranch, developBranch);
+      let backportMr = existing.find(item => item.state === "merged") || existing.find(item => item.state === "opened");
+      if (!backportMr) {
+        checkAborted(signal);
+        if (await branchExists(apiBase, token, project, sourceBranch)) {
+          throw new Error(`Ветка ${sourceBranch} уже существует без открытого/влитого MR. Проверьте незавершённый cherry-pick вручную.`);
+        }
+        const commits = await guaranteeCommits(apiBase, token, project, mr, signal);
+        checkAborted(signal);
+        await createBranch(apiBase, token, project, sourceBranch, developBranch);
+        for (const sha of commits) {
+          checkAborted(signal);
+          try {
+            await cherryPickCommit(apiBase, token, project, sha, sourceBranch);
+          } catch (err) {
+            throw new Error(`Cherry-pick !${mr.iid} (${sha}) в ${sourceBranch} не выполнен: ${formatError(err)}. Мастер уже влит; проверьте ветку вручную.`);
+          }
+        }
+        checkAborted(signal);
+        backportMr = await createMergeRequest(apiBase, token, project, {
+          sourceBranch, targetBranch: developBranch, title: `Гарантия !${mr.iid}: ${mr.title || mr.source_branch}`,
+        });
+      }
+      log(`Гарантия: MR !${backportMr.iid} ${backportMr.web_url || ""}`);
+      if (options.stopAfterPromoteMr || backportMr.state === "merged") continue;
+      // A successful pipeline is mandatory; an empty/skipped MR pipeline is not accepted.
+      await mergeIfNeeded(apiBase, token, project, backportMr, {
+        dryRun, label: "Гарантия cherry-pick", waitPipelineBefore: true, strictPipeline: true,
+        pipelineTimeout, pollSec, log, heartbeat, signal, hooks,
+      });
+    }
+  };
+  // Wait for both outcomes so a cherry-pick failure cannot suppress the master image.
+  const [buildResult, backportResult] = await Promise.allSettled([build(), backport()]);
+  const errors = [buildResult, backportResult].filter(result => result.status === "rejected");
+  if (errors.length) {
+    if (signal?.aborted) checkAborted(signal);
+    throw new Error(errors.map(result => formatError(result.reason)).join("; "));
+  }
+  log("Гарантия: готово.");
+  return { buildImage: buildResult.value };
 }

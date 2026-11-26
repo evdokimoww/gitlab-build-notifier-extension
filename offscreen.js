@@ -2,6 +2,7 @@ const DEFAULT_SOUND_URL = chrome.runtime.getURL("sounds/notify.wav");
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type !== "PLAY_GITLAB_CI_SOUND") return;
+
   const vol = typeof msg.volume === "number" ? msg.volume : 0.4;
   const url =
     typeof msg.soundUrl === "string" && msg.soundUrl.startsWith("chrome-extension://")

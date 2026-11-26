@@ -129,7 +129,7 @@ export async function createMergeRequest(
 /**
  * @returns {Promise<Record<string, unknown>>}
  */
-export async function mergeMergeRequest(apiBase, token, projectPath, mrIid) {
+export async function mergeMergeRequest(apiBase, token, projectPath, mrIid, sha) {
   const pid = encodeProjectPath(projectPath);
   const url = `${apiBase}projects/${pid}/merge_requests/${mrIid}/merge`;
   return gitlabFetch(url, token, {
@@ -137,6 +137,7 @@ export async function mergeMergeRequest(apiBase, token, projectPath, mrIid) {
     body: {
       should_remove_source_branch: false,
       merge_when_pipeline_succeeds: false,
+      ...(sha ? { sha } : {}),
     },
   });
 }
@@ -299,4 +300,36 @@ export async function listPipelineJobs(apiBase, token, projectPath, pipelineId) 
     page += 1;
   }
   return all;
+}
+
+/** Create a temporary branch for a cherry-pick MR. */
+export async function createBranch(apiBase, token, projectPath, branch, ref) {
+  return gitlabFetch(`${apiBase}projects/${encodeProjectPath(projectPath)}/repository/branches`, token, {
+    method: "POST", body: { branch, ref },
+  });
+}
+
+export async function cherryPickCommit(apiBase, token, projectPath, sha, branch) {
+  return gitlabFetch(`${apiBase}projects/${encodeProjectPath(projectPath)}/repository/commits/${encodeURIComponent(sha)}/cherry_pick`, token, {
+    method: "POST", body: { branch },
+  });
+}
+
+export async function getCommit(apiBase, token, projectPath, sha) {
+  return gitlabFetch(`${apiBase}projects/${encodeProjectPath(projectPath)}/repository/commits/${encodeURIComponent(sha)}`, token);
+}
+
+/** Includes merged MRs so a repeated guarantee run does not cherry-pick twice. */
+export async function listBackportMergeRequests(apiBase, token, projectPath, sourceBranch, targetBranch) {
+  const q = new URLSearchParams({ source_branch: sourceBranch, target_branch: targetBranch, state: "all" });
+  return gitlabFetch(`${apiBase}projects/${encodeProjectPath(projectPath)}/merge_requests?${q}`, token);
+}
+
+export async function listMrCommits(apiBase, token, projectPath, iid) {
+  const all = [];
+  for (let page = 1; ; page++) {
+    const rows = await gitlabFetch(`${apiBase}projects/${encodeProjectPath(projectPath)}/merge_requests/${iid}/commits?per_page=100&page=${page}`, token);
+    all.push(...rows);
+    if (rows.length < 100) return all;
+  }
 }

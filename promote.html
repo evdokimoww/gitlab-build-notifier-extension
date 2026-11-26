@@ -619,11 +619,31 @@
         color: var(--warn);
       }
 
+      .session-toolbar {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding-top: 11px;
+      }
+
+      .session-toolbar[hidden] {
+        display: none;
+      }
+
+      #clearSessions {
+        flex: 0 0 auto;
+        min-height: 32px;
+        padding: 5px 9px;
+        font-size: 11px;
+      }
+
       .session-bar {
         display: flex;
+        flex: 1;
+        min-width: 0;
         gap: 7px;
         overflow-x: auto;
-        padding: 11px 0 2px;
+        padding-bottom: 2px;
         scrollbar-width: thin;
       }
 
@@ -636,8 +656,8 @@
         display: inline-flex;
         align-items: center;
         gap: 7px;
-        flex: 0 0 auto;
-        max-width: 100%;
+        flex: 0 0 220px;
+        width: 220px;
         padding: 5px 9px;
         border: 1px solid var(--border);
         border-radius: 7px;
@@ -702,18 +722,26 @@
       }
 
       .session-tab-label {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
         font-family: var(--mono);
         font-size: 11px;
         font-weight: 750;
       }
 
       .session-tab-badge {
+        flex: 0 0 auto;
         color: var(--text-faint);
         font-size: 10px;
         font-weight: 600;
       }
 
       .session-tab-close {
+        flex: 0 0 auto;
         margin-left: 1px;
         padding: 0 2px;
         cursor: pointer;
@@ -829,8 +857,85 @@
       }
 
       #buildImage {
+        flex: 1;
+        min-width: 0;
+        margin-top: 0;
         font-family: var(--mono);
         font-size: 11px;
+      }
+
+      .build-image-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 7px;
+      }
+
+      #copyImage {
+        flex: 0 0 auto;
+        width: 38px;
+        height: 38px;
+        padding: 9px;
+      }
+
+      #copyImage svg {
+        display: block;
+        width: 18px;
+        height: 18px;
+      }
+
+      #buildMergeRequestsBlock {
+        flex: 0 0 auto;
+        margin: 10px 14px 0;
+        padding: 11px 13px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--surface-soft);
+      }
+
+      #buildMergeRequestsBlock[hidden] {
+        display: none;
+      }
+
+      #buildMergeRequestsTitle {
+        margin: 0;
+        color: var(--text-soft);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      #buildMergeRequests {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        max-height: 100px;
+        overflow-y: auto;
+        list-style: none;
+        margin: 8px 0 0;
+        padding: 0;
+      }
+
+      #buildMergeRequests li {
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      #buildMergeRequests a {
+        display: block;
+        padding: 4px 7px;
+        overflow-wrap: anywhere;
+        color: var(--running);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: var(--surface-raised);
+        font-family: var(--mono);
+        font-size: 11px;
+        text-decoration: none;
+      }
+
+      #buildMergeRequests a:hover {
+        border-color: var(--running);
+        text-decoration: underline;
       }
 
       #buildImage:disabled {
@@ -839,10 +944,7 @@
         cursor: not-allowed;
       }
 
-      .build-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+      #newMr {
         margin-top: 9px;
       }
 
@@ -1128,7 +1230,8 @@
           padding-left: 9px;
         }
 
-        #buildImageBlock {
+        #buildImageBlock,
+        #buildMergeRequestsBlock {
           margin-right: 9px;
           margin-left: 9px;
         }
@@ -1224,7 +1327,7 @@
                 placeholder="По одному MR на строку&#10;group/repo!43&#10;group/repo!44"
               ></textarea>
               <span class="hint">
-                Один проект и одна staging-ветка (по маскам из настроек). MR
+                Один проект и одна целевая ветка (по маскам из настроек). Для MR в мастер используется флоу «Гарантия». MR
                 будут объединены последовательно.
               </span>
             </label>
@@ -1321,17 +1424,37 @@
 
           <div class="activity-meta">
             <p id="statusLine" aria-live="polite"></p>
-            <div
-              id="sessionBar"
-              class="session-bar"
-              hidden
-              aria-label="Сессии promote"
-            ></div>
+            <div id="sessionToolbar" class="session-toolbar" hidden>
+              <div
+                id="sessionBar"
+                class="session-bar"
+                hidden
+                aria-label="Сессии promote"
+              ></div>
+              <button
+                type="button"
+                id="clearSessions"
+                title="Убрать все завершённые сессии"
+                disabled
+              >Очистить</button>
+            </div>
           </div>
 
           <div id="buildImageBlock">
-            <label>
-              Build image
+            <label for="buildImage">Build image</label>
+            <div class="build-image-row">
+              <button
+                type="button"
+                id="copyImage"
+                title="Копировать образ"
+                aria-label="Копировать образ"
+                disabled
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <rect x="8" y="8" width="12" height="12" rx="2" />
+                  <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+                </svg>
+              </button>
               <input
                 type="text"
                 id="buildImage"
@@ -1339,16 +1462,16 @@
                 disabled
                 placeholder="ожидание сборки…"
               />
-            </label>
-            <div class="build-actions">
-              <button type="button" id="copyImage" disabled>
-                Копировать образ
-              </button>
-              <button type="button" id="newMr" class="primary" hidden>
-                Новый MR
-              </button>
             </div>
+            <button type="button" id="newMr" class="primary" hidden>
+              Новый MR
+            </button>
           </div>
+
+          <section id="buildMergeRequestsBlock" aria-labelledby="buildMergeRequestsTitle" hidden>
+            <h3 id="buildMergeRequestsTitle">MR в билде</h3>
+            <ul id="buildMergeRequests"></ul>
+          </section>
 
           <div id="logPanel">
             <div class="console-head">
