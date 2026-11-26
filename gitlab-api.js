@@ -152,6 +152,28 @@ export async function listMrPipelines(apiBase, token, projectPath, mrIid) {
   return Array.isArray(rows) ? rows : [];
 }
 
+/** Include merged results only when their source parent is the expected MR head. */
+export async function listMrPipelinesForSha(apiBase, token, projectPath, mr) {
+  const pipelines = await listMrPipelines(apiBase, token, projectPath, Number(mr.iid));
+  if (!mr.sha) return pipelines;
+  const current = [];
+  for (const pipeline of pipelines) {
+    if (pipeline.sha === mr.sha) {
+      current.push(pipeline);
+    } else if (pipeline.ref === `refs/merge-requests/${mr.iid}/merge`) {
+      try {
+        const commit = await getCommit(apiBase, token, projectPath, pipeline.sha);
+        if (commit.parent_ids?.[1] === mr.sha) {
+          current.push({ ...pipeline, source_sha: mr.sha });
+        }
+      } catch (error) {
+        if (!/^GitLab 404\b/.test(String(error.message))) throw error;
+      }
+    }
+  }
+  return current;
+}
+
 /**
  * Pipeline для merge request (merge_request_event).
  * @returns {Promise<Record<string, unknown>>}
@@ -200,7 +222,7 @@ export async function listPipelinesForRef(
   token,
   projectPath,
   ref,
-  { perPage = 5 } = {}
+  { perPage = 5, sha } = {}
 ) {
   const pid = encodeProjectPath(projectPath);
   const q = new URLSearchParams({
@@ -209,6 +231,7 @@ export async function listPipelinesForRef(
     sort: "desc",
     per_page: String(perPage),
   });
+  if (sha) q.set("sha", sha);
   const url = `${apiBase}projects/${pid}/pipelines?${q}`;
   const rows = await gitlabFetch(url, token);
   return Array.isArray(rows) ? rows : [];

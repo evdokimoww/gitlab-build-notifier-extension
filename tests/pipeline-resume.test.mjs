@@ -84,3 +84,12 @@ test("manual retry waiting still respects the configured timeout and logs once",
   }), /не успел за 3 с/);
   assert.equal(logs.filter(line => line.includes("Ждём ручного перезапуска")).length, 1);
 });
+
+test("skipped merged results cannot hide a failed pipeline for the same source", () => {
+  const ctx = harness();
+  assert.equal(ctx.selectPipelineForWait([
+    { id: 12, sha: "temporary-result", source_sha: "head", status: "skipped" },
+    { id: 11, sha: "head", status: "failed" },
+    { id: 10, sha: "head", status: "success" },
+  ]).id, 11);
+});

@@ -20,6 +20,7 @@ import {
   getMergeRequest,
   getProject,
   listMrPipelines,
+  listMrPipelinesForSha,
   listOpenMergeRequests,
   listPipelineJobs,
   listPipelinesForRef,
@@ -204,7 +205,8 @@ function pipelinesAfter(pipelines, afterPipelineId) {
  */
 function selectPipelineForWait(pipelines) {
   const newest = pipelines.reduce((a, b) => Number(a.id) > Number(b.id) ? a : b, pipelines[0]);
-  if (newest?.sha) pipelines = pipelines.filter(p => p.sha === newest.sha);
+  const sourceSha = newest?.source_sha || newest?.sha;
+  if (sourceSha) pipelines = pipelines.filter(p => (p.source_sha || p.sha) === sourceSha);
   const candidates = pipelines.filter(p => String(p.status) !== "skipped");
   return (candidates.length ? candidates : pipelines)
     .reduce((a, b) => Number(a.id) > Number(b.id) ? a : b);
@@ -674,9 +676,8 @@ async function ensureMrPipelineStarted(
 
   const sourceBranch = String(mr.source_branch || "");
   checkAborted(signal);
-  const pipelines = (await listMrPipelines(apiBase, token, project, iid))
-    .filter(p => !mr.sha || p.sha === mr.sha);
-  if (hasSuccessOrActivePipeline(pipelines) || pipelines.some(p => ["failed", "canceled"].includes(String(p.status)) && (!mr.sha || p.sha === mr.sha))) {
+  const pipelines = await listMrPipelinesForSha(apiBase, token, project, mr);
+  if (hasSuccessOrActivePipeline(pipelines) || pipelines.some(p => ["failed", "canceled"].includes(String(p.status)))) {
     log(`MR !${iid}: pipeline уже есть на MR`);
     logPipelinesSnapshot(log, `MR !${iid}`, pipelines);
     return null;
@@ -793,12 +794,13 @@ async function ensureBranchPipelineStarted(
   project,
   ref,
   afterPipelineId,
-  { dryRun, log, signal }
+  { dryRun, log, signal, expectedSha }
 ) {
   if (dryRun) return;
 
   checkAborted(signal);
-  const pipelines = await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 });
+  const pipelines = (await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10, sha: expectedSha }))
+    .filter(p => !expectedSha || p.sha === expectedSha);
   const newer = pipelinesAfter(pipelines, afterPipelineId);
 
   if (hasRelevantActivePipeline(pipelines, afterPipelineId)) {
@@ -833,6 +835,9 @@ async function ensureBranchPipelineStarted(
 
   log(`Ветка ${JSON.stringify(ref)}: pipeline не запущен, запуск через API…`);
   logPipelinesSnapshot(log, `${ref} (перед create)`, pipelines, { afterPipelineId });
+  if (expectedSha && (await getCommit(apiBase, token, project, ref)).id !== expectedSha) {
+    throw new Error(`Ветка ${ref} изменилась после merge. Нельзя запустить сборку ${expectedSha}. Повторите запуск.`);
+  }
   const created = await createRefPipeline(apiBase, token, project, ref);
   log(
     `  создан branch pipeline #${created.id} (${String(created.status || "created")}, source=api)`
@@ -1139,7 +1144,7 @@ async function waitBranchPipeline(
   project,
   ref,
   afterPipelineId,
-  { timeoutSec, pollSec, log, signal, dryRun, heartbeat, onPipelineState }
+  { timeoutSec, pollSec, log, signal, dryRun, heartbeat, onPipelineState, expectedSha }
 ) {
   const label = `branch pipeline ${ref}`;
   const ensurePipeline = dryRun
@@ -1149,6 +1154,7 @@ async function waitBranchPipeline(
           dryRun,
           log,
           signal,
+          expectedSha,
         });
 
   /**
@@ -1199,7 +1205,8 @@ async function waitBranchPipeline(
   let pipelineId;
   try {
     pipelineId = await waitPipelineLoop(
-      () => listPipelinesForRef(apiBase, token, project, ref, { perPage: 10 }),
+      async () => (await listPipelinesForRef(apiBase, token, project, ref, { perPage: 10, sha: expectedSha }))
+        .filter(p => !expectedSha || p.sha === expectedSha),
       {
         timeoutSec,
         pollSec,
@@ -1906,9 +1913,9 @@ export async function runPromote(apiBaseUrl, token, options, hooks = {}) {
     } else {
       const promotePipelineId = await waitPipelineLoop(
         async () => {
-          const mrPipelines = await listMrPipelines(apiBase, token, project, Number(promoteMr.iid));
+          const mrPipelines = await listMrPipelinesForSha(apiBase, token, project, promoteMr);
           const branchPipelines = await listPipelinesForRef(apiBase, token, project, developBranch);
-          return [...mrPipelines, ...branchPipelines].filter(p => !promoteMr.sha || p.sha === promoteMr.sha);
+          return [...mrPipelines, ...branchPipelines.filter(p => !promoteMr.sha || p.sha === promoteMr.sha)];
         },
         {
           timeoutSec: pipelineTimeout,
@@ -2045,9 +2052,9 @@ async function mergeIfNeeded(
         });
       await ensurePipeline();
       await waitPipelineLoop(async () => {
-        const mrPipelines = await listMrPipelines(apiBase, token, project, iid);
+        const mrPipelines = await listMrPipelinesForSha(apiBase, token, project, mr);
         const branchPipelines = await listPipelinesForRef(apiBase, token, project, String(mr.source_branch));
-        return [...mrPipelines, ...branchPipelines].filter(p => !mr.sha || p.sha === mr.sha);
+        return [...mrPipelines, ...branchPipelines.filter(p => !mr.sha || p.sha === mr.sha)];
       }, {
         timeoutSec: pipelineTimeout,
         pollSec,
@@ -2220,9 +2227,14 @@ async function runGuarantee(apiBase, token, batch, developBranch, options, hooks
       log(`Сборка ${productionBranch}: ожидание образа пропущено.`);
       return undefined;
     }
+    const expectedSha = await promoteCheckpoint(hooks, "guaranteeBuildSha", async () => {
+      const commit = await getCommit(apiBase, token, project, productionBranch);
+      if (!commit.id) throw new Error(`Не найден коммит ветки ${productionBranch}`);
+      return String(commit.id);
+    });
     const pipelineId = await waitBranchPipeline(apiBase, token, project, productionBranch,
       baseline,
-      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun, onPipelineState: hooks.onPipelineState });
+      { timeoutSec: pipelineTimeout, pollSec, log, heartbeat, signal, dryRun, expectedSha, onPipelineState: hooks.onPipelineState });
     const image = await extractBuildImage(apiBase, token, project, pipelineId, buildStage, log, signal);
     log(`Build image: ${image}`);
     await hooks.onBuildImage?.(image);
