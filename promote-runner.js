@@ -24,7 +24,7 @@ export const PROMOTE_KEEPALIVE_ALARM = "promote-keepalive";
  *   logs: string[],
  *   buildImage: string,
  *   mrArg: string,
- *   mergeRequests?: { project: string, iid: number, url: string }[],
+ *   mergeRequests?: { project: string, iid: number, url: string, conflict?: string }[],
  *   error: string,
  *   statusText: string,
  *   statusKind: string,
@@ -411,8 +411,17 @@ async function executePromoteRun(sessionId, form, settings, signal, progress = {
       log: (line) => enqueueUpdate(() => appendSessionLog(sessionId, line)),
       heartbeat: () => enqueueUpdate(() => patchSessionById(sessionId, {})),
       onBuildImage: (image) => enqueueUpdate(() => patchSessionById(sessionId, { buildImage: image })),
-      onConflict: (mr, message) =>
-        notifyPromoteConflict(sessionId, mr, message, settings, projectPath),
+      onConflict: (mr, message) => enqueueUpdate(async () => {
+        const state = await loadSessionsState();
+        const mergeRequests = (state.items[sessionId]?.mergeRequests || []).map((ref) => {
+          const matches = mr.web_url
+            ? ref.url === mr.web_url
+            : ref.project === projectPath && ref.iid === Number(mr.iid);
+          return matches ? { ...ref, conflict: message } : ref;
+        });
+        await patchSessionById(sessionId, { mergeRequests });
+        await notifyPromoteConflict(sessionId, mr, message, settings, projectPath);
+      }),
     });
     await updateQueue;
     if (result.buildImage) {

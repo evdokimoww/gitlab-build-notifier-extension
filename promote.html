@@ -938,14 +938,16 @@
         text-decoration: underline;
       }
 
+      #buildMergeRequests a.build-mr-conflict {
+        color: var(--err);
+        border-color: var(--err);
+        background: var(--err-soft);
+      }
+
       #buildImage:disabled {
         color: var(--text-faint);
         opacity: 1;
         cursor: not-allowed;
-      }
-
-      #newMr {
-        margin-top: 9px;
       }
 
       #planDialog {
@@ -1463,9 +1465,6 @@
                 placeholder="ожидание сборки…"
               />
             </div>
-            <button type="button" id="newMr" class="primary" hidden>
-              Новый MR
-            </button>
           </div>
 
           <section id="buildMergeRequestsBlock" aria-labelledby="buildMergeRequestsTitle" hidden>

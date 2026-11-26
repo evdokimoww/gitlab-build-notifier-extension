@@ -125,3 +125,72 @@ test("worker restart resumes the saved flow once using current credentials and c
   assert.equal(data.promoteSessions.items.saved.progress.example, true);
   assert.equal(JSON.stringify(data.promoteSessions).includes("current-token"), false);
 });
+
+test("batch conflicts persist on affected MR links without marking other MRs", async () => {
+  const base = "https://git.example.com";
+  const refs = [
+    { project: "team/app", iid: 42 },
+    { project: "team/app", iid: 43 },
+    { project: "other/app", iid: 43 },
+  ];
+  let state = { activeId: "batch", items: { batch: {
+    id: "batch", status: "running", logs: [], startedAt: Date.now(),
+    mergeRequests: refs.map(ref => ({ ...ref, url: `${base}/${ref.project}/-/merge_requests/${ref.iid}` })),
+  } } };
+  class ConflictError extends Error {}
+  const context = vm.createContext({
+    URL, DOMException, console, parseMrArgList,
+    MrMergeConflictError: ConflictError,
+    findNotifyTabIds: async () => [], deliverCiNotification: async () => {},
+    runPromote: async (_base, _token, _form, hooks) => {
+      // The hook is synchronous at its call site; pending storage updates must still finish.
+      hooks.onConflict({ iid: 43, web_url: `${base}/team/app/-/merge_requests/43` }, "MR !43: конфликт");
+      hooks.onConflict({ iid: 42, web_url: `${base}/team/app/-/merge_requests/42` }, "MR !42: конфликт");
+      hooks.log("conflict detected");
+      throw new ConflictError("merge conflict");
+    },
+    chrome: {
+      runtime: { async sendMessage() {} },
+      storage: { local: {
+        async get(key) { return typeof key === "string" ? {} : { promoteSessions: structuredClone(state) }; },
+        async set(value) { state = structuredClone(value.promoteSessions); },
+      } },
+      alarms: { create() {}, clear() {} },
+    },
+  });
+  const source = (await readFile(new URL("../promote-runner.js", import.meta.url), "utf8"))
+    .replace(/^import .*;$/gm, "").replace(/^export /gm, "");
+  vm.runInContext(source, context);
+  await context.executePromoteRun("batch", { mrArg: "team/app!42" }, { gitlabBaseUrl: base });
+  assert.equal(state.items.batch.mergeRequests[0].conflict, "MR !42: конфликт");
+  assert.equal(state.items.batch.mergeRequests[1].conflict, "MR !43: конфликт");
+  assert.equal(state.items.batch.mergeRequests[2].conflict, undefined);
+  assert.equal(state.items.batch.status, "error");
+});
+
+test("MR list highlights only conflicts and clears them when switching sessions", async () => {
+  const element = () => ({ children: [], className: "", textContent: "",
+    replaceChildren() { this.children = []; },
+    appendChild(child) { this.children.push(child); },
+  });
+  const list = element();
+  const block = element();
+  const context = vm.createContext({ URL, document: {
+    readyState: "loading", addEventListener() {},
+    getElementById: id => ({ buildMergeRequests: list, buildMergeRequestsBlock: block })[id],
+    createElement: element,
+  } });
+  vm.runInContext(await readFile(new URL("../promote.js", import.meta.url), "utf8"), context);
+  const good = { project: "team/app", iid: 1, url: "https://git.example.com/team/app/-/merge_requests/1" };
+  context.renderBuildMergeRequests({ mergeRequests: [good, { ...good, iid: 2, conflict: "MR !2: конфликт" }] });
+  assert.equal(list.children[0].children[0].className, "");
+  const badLink = list.children[1].children[0];
+  assert.equal(badLink.className, "build-mr-conflict");
+  assert.match(badLink.textContent, /Конфликт/);
+  assert.equal(badLink.title, "MR !2: конфликт");
+  context.renderBuildMergeRequests({ mergeRequests: [good] });
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[0].className, "");
+  context.renderBuildMergeRequests(null);
+  assert.equal(block.hidden, true);
+});

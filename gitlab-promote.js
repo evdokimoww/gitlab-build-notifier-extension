@@ -2003,12 +2003,34 @@ async function mergeIfNeeded(
     mr = await refreshMergeRequest(apiBase, token, project, iid, signal);
   }
   if (mr.state === "merged") return mr;
-  if (verifiedSha && mr.sha !== verifiedSha) throw new Error(`Коммит MR !${iid} изменился после проверки pipeline. Повторите анализ.`);
-  if (strictPipeline && mr.target_branch !== expectedTarget) {
-    throw new Error(`Target MR !${iid} изменился. Повторите анализ.`);
-  }
-  if (strictPipeline && !mr.sha) throw new Error(`MR !${iid}: отсутствует SHA для проверки pipeline`);
-  ensureMergeable(mr, label, hooks, log);
+  const checksDeadline = Date.now() + pipelineTimeout * 1000;
+  let pipelineSha = verifiedSha;
+  const checksPending = (value) =>
+    [value.merge_status, value.detailed_merge_status].some(status =>
+      ["checking", "unchecked", "preparing", "approvals_syncing"].includes(status));
+  const validate = () => {
+    if (pipelineSha && mr.sha !== pipelineSha) throw new Error(`Коммит MR !${iid} изменился после проверки pipeline. Повторите анализ.`);
+    if (mr.target_branch !== expectedTarget) {
+      throw new Error(`Target MR !${iid} изменился. Повторите анализ.`);
+    }
+    if (strictPipeline && !mr.sha) throw new Error(`MR !${iid}: отсутствует SHA для проверки pipeline`);
+    ensureMergeable(mr, label, hooks, log);
+  };
+  const waitForChecks = async () => {
+    validate();
+    while (!dryRun && mr.state !== "merged" && checksPending(mr)) {
+      checkAborted(signal);
+      if (Date.now() >= checksDeadline) {
+        throw new Error(`${label} MR !${iid}: проверка возможности слияния не завершилась за ${pipelineTimeout} с`);
+      }
+      await heartbeat?.();
+      await sleep(pollSec * 1000, signal);
+      mr = await refreshMergeRequest(apiBase, token, project, iid, signal);
+      validate();
+    }
+  };
+  await waitForChecks();
+  if (mr.state === "merged") return mr;
 
   if (waitPipelineBefore) {
     log(`${label}: ожидание pipeline перед merge (!${iid})…`);
@@ -2039,6 +2061,13 @@ async function mergeIfNeeded(
     }
   }
 
+  if (waitPipelineBefore && !dryRun) {
+    pipelineSha = mr.sha;
+    mr = await refreshMergeRequest(apiBase, token, project, iid, signal);
+    await waitForChecks();
+    if (mr.state === "merged") return mr;
+  }
+
   log(
     `${label}: merge !${iid} (${mr.source_branch} → ${mr.target_branch}), ` +
       "should_remove_source_branch=false"
@@ -2046,21 +2075,30 @@ async function mergeIfNeeded(
   logMrSnapshot(log, `${label} перед merge`, mr);
   if (dryRun) return mr;
 
-  checkAborted(signal);
-  try {
-    return await mergeMergeRequest(apiBase, token, project, iid, strictPipeline || waitPipelineBefore || verifiedSha ? String(mr.sha) : undefined);
-  } catch (err) {
-    const msg = formatError(err);
+  while (true) {
     checkAborted(signal);
-    log(`  [merge API] ошибка: ${msg}`);
-    const fresh = await refreshMergeRequest(apiBase, token, project, iid, signal);
-    logMrSnapshot(log, `${label} после ошибки merge`, fresh);
-    const mrPipelines = await listMrPipelines(apiBase, token, project, iid);
-    logPipelinesSnapshot(log, `MR !${iid}`, mrPipelines);
-    throw new Error(
-      `${label} merge !${iid} failed: ${msg} | MR: ${formatMrSummary(fresh)} | ` +
-        `pipelines: ${formatPipelinesSummary(mrPipelines)}`
-    );
+    try {
+      return await mergeMergeRequest(apiBase, token, project, iid, strictPipeline || waitPipelineBefore || verifiedSha ? String(mr.sha) : undefined);
+    } catch (err) {
+      const msg = formatError(err);
+      checkAborted(signal);
+      log(`  [merge API] ошибка: ${msg}`);
+      const fresh = await refreshMergeRequest(apiBase, token, project, iid, signal);
+      logMrSnapshot(log, `${label} после ошибки merge`, fresh);
+      if (fresh.state === "merged") return fresh;
+      if (/\b405\b/.test(msg) && checksPending(fresh)) {
+        mr = fresh;
+        await waitForChecks();
+        if (mr.state === "merged") return mr;
+        continue;
+      }
+      const mrPipelines = await listMrPipelines(apiBase, token, project, iid);
+      logPipelinesSnapshot(log, `MR !${iid}`, mrPipelines);
+      throw new Error(
+        `${label} merge !${iid} failed: ${msg} | MR: ${formatMrSummary(fresh)} | ` +
+          `pipelines: ${formatPipelinesSummary(mrPipelines)}`
+      );
+    }
   }
 }
 

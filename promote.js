@@ -77,7 +77,6 @@ function statusTitle(session) {
 function setActiveSessionControls(session) {
   const running = session?.status === "running";
   $("cancel").disabled = !running;
-  $("newMr").hidden = !(session?.status === "success" && session?.buildImage);
 }
 
 function setBuildImageReady(ready, image = "") {
@@ -94,7 +93,6 @@ function clearDetailView() {
   setLogText("");
   setBuildImageReady(false);
   renderBuildMergeRequests(null);
-  $("newMr").hidden = true;
   setActiveSessionControls(null);
 }
 
@@ -110,6 +108,11 @@ function renderBuildMergeRequests(session) {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = `${mr.project}!${mr.iid}`;
+    if (mr.conflict) {
+      link.className = "build-mr-conflict";
+      link.textContent += " · Конфликт";
+      link.title = mr.conflict;
+    }
     item.appendChild(link);
     list.appendChild(item);
   }
@@ -324,23 +327,6 @@ async function restoreReadyStatus() {
   }
 }
 
-async function resetForNewMr() {
-  if (activeSessionId) {
-    await chrome.runtime.sendMessage({
-      type: "promote-dismiss",
-      sessionId: activeSessionId,
-    });
-  }
-
-  $("mrArg").value = "";
-  $("mrBatch").value = "";
-  clearDetailView();
-  await chrome.storage.local.set({ [STORAGE_KEYS.mrArg]: "", [STORAGE_KEYS.mrBatch]: "" });
-  await syncSessionsFromBackground();
-  await restoreReadyStatus();
-  $("mrArg").focus();
-}
-
 async function ensureHostPermission(gitlabBaseUrl) {
   const u = new URL(gitlabBaseUrl);
   const originPat = `${u.origin}/*`;
@@ -463,10 +449,6 @@ function bindUi() {
   $("openOptions").addEventListener("click", (e) => {
     e.preventDefault();
     chrome.runtime.openOptionsPage();
-  });
-
-  $("newMr").addEventListener("click", () => {
-    resetForNewMr().catch((e) => setStatus(String(e), "err"));
   });
 
   $("copyImage").addEventListener("click", async () => {
