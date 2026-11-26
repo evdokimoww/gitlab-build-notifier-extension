@@ -34,7 +34,7 @@ function harness(overrides = {}) {
       } else backport.state = "merged";
       return structuredClone(iid === 1 ? main : backport);
     },
-    getCommit: async () => ({ parent_ids: ["a", "b"] }),
+    getCommit: async () => ({ id: "merge", parent_ids: ["a", "b"] }),
     createBranch: async (_a, _t, _p, branch, ref) => calls.push(["branch", branch, ref]),
     cherryPickCommit: async (_a, _t, _p, sha, branch) => calls.push(["pick", sha, branch]),
     createMergeRequest: async (_a, _t, _p, params) => {
@@ -45,6 +45,7 @@ function harness(overrides = {}) {
     ...overrides,
   });
   vm.runInContext(source, context);
+  vm.runInContext(`listMrPipelinesForSha = ${api.listMrPipelinesForSha.toString()}`, context);
   // Skip timers without replacing merge orchestration or pipeline validation.
   vm.runInContext("sleep = async () => {}", context);
   const images = [];
@@ -168,7 +169,7 @@ test("squash and fast-forward transfer the full changeset", async () => {
   await squash.run();
   assert.equal(squash.calls.find(c => c[0] === "pick")[1], "squash");
   const ff = harness({
-    getCommit: async () => ({ parent_ids: ["b"] }),
+    getCommit: async (_a, _t, _p, ref) => ({ id: ref === "master" ? "merge" : ref, parent_ids: ["b"] }),
     listMrCommits: async () => [{ id: "b", parent_ids: ["a"] }, { id: "a", parent_ids: ["base"] }],
   });
   ff.main.merge_commit_sha = "b";
@@ -221,7 +222,7 @@ test("analysis flag boundaries match execution", async () => {
 
 test("fast-forward history with an internal merge does not duplicate side-branch patches", async () => {
   const h = harness({
-    getCommit: async () => ({ parent_ids: ["m"] }),
+    getCommit: async (_a, _t, _p, ref) => ({ id: ref === "master" ? "merge" : ref, parent_ids: ["m"] }),
     listMrCommits: async () => [
       { id: "head", parent_ids: ["m"] }, { id: "side", parent_ids: ["a"] },
       { id: "m", parent_ids: ["a", "side"] }, { id: "a", parent_ids: ["base"] },
@@ -328,4 +329,132 @@ test("standard flow recovers at production build with the same promote MR and ba
   assert.equal((await h.run({}, { progress })).buildImage, "registry/app:master");
   assert.deepEqual(h.calls.filter(c => c[0] === "merge"), [["merge", 1], ["merge", 2]]);
   assert.equal(h.calls.filter(c => c[0] === "createMR").length, 1);
+});
+
+test("batch master image waits for the commit after every MR is merged", async () => {
+  const second = { iid: 3, source_branch: "fix2", target_branch: "master", state: "opened", sha: "feature2" };
+  let reads = 0;
+  const h = harness({
+    getMergeRequest: async (_a, _t, _p, iid) => structuredClone(iid === 1 ? h.main : second),
+    mergeMergeRequest: async (_a, _t, _p, iid) => {
+      const mr = iid === 1 ? h.main : second;
+      return Object.assign(mr, { state: "merged", merge_commit_sha: `merge${iid}` });
+    },
+    getCommit: async () => {
+      assert.equal(h.main.state, "merged");
+      assert.equal(second.state, "merged");
+      return { id: "merge3" };
+    },
+    listPipelinesForRef: async () => ++reads === 1
+      ? [{ id: 10, sha: "before", status: "success" }]
+      : reads === 2 ? [{ id: 11, sha: "merge1", status: "success" }]
+        : [{ id: 12, sha: "merge3", status: "success" }, { id: 11, sha: "merge1", status: "success" }],
+    listBackportMergeRequests: async () => [{ state: "merged" }],
+  });
+  h.context.extractBuildImage = async (_a, _t, _p, id) => {
+    assert.equal(id, 12);
+    return "registry/app:batch";
+  };
+  const progress = {};
+  const result = await h.run({ mrBatch: "team/app!3", pipelineTimeoutSec: 1 }, { progress });
+  assert.equal(result.buildImage, "registry/app:batch");
+  assert.equal(progress.guaranteeBuildSha, "merge3");
+  assert.ok(reads >= 3);
+});
+
+test("resumed guarantee keeps its build SHA when master advances", async () => {
+  const h = harness({
+    getCommit: async () => assert.fail("saved SHA must be reused"),
+    listPipelinesForRef: async () => [
+      { id: 20, sha: "later", status: "success" },
+      { id: 11, sha: "merge", status: "success" },
+    ],
+    listBackportMergeRequests: async () => [{ state: "merged" }],
+  });
+  h.main.state = "merged";
+  h.main.merge_commit_sha = "merge";
+  h.context.extractBuildImage = async (_a, _t, _p, id) => {
+    assert.equal(id, 11);
+    return "registry/app:saved";
+  };
+  assert.equal((await h.run({}, { progress: { guaranteeBaseline: 10, guaranteeBuildSha: "merge" } })).buildImage,
+    "registry/app:saved");
+});
+
+test("backport accepts merged results for its current source without starting another pipeline", async () => {
+  const h = harness({
+    listMrPipelines: async () => [{ id: 12, sha: "merged-result", ref: "refs/merge-requests/2/merge", status: "success" }],
+    listPipelinesForRef: async () => [],
+    getCommit: async () => ({ parent_ids: ["target", "picked"] }),
+    createMrPipeline: async () => assert.fail("existing merged results must be reused"),
+  });
+  await h.run({ skipBuildImage: true });
+  assert.ok(h.calls.some(c => c[0] === "merge" && c[1] === 2 && c[2] === "picked"));
+});
+
+test("standard promote accepts merged results for the current develop SHA", async () => {
+  const h = harness({
+    branchExists: async () => true,
+    getProject: async () => ({ default_branch: "master" }),
+    listOpenMergeRequests: async () => [structuredClone(h.backport)],
+    listPipelinesForRef: async (_a, _t, _p, ref) => ref === "develop"
+      ? [{ id: h.main.state === "merged" ? 11 : 10, sha: "feature", status: "success" }] : [],
+    listMrPipelines: async () => [{ id: 12, sha: "merged-result", ref: "refs/merge-requests/2/merge", status: "success" }],
+    getCommit: async () => ({ parent_ids: ["target", "feature"] }),
+    createMrPipeline: async () => assert.fail("existing merged results must be reused"),
+  });
+  h.main.target_branch = "develop";
+  Object.assign(h.backport, { source_branch: "develop", target_branch: "master", sha: "feature" });
+  await h.run({ skipBuildImage: true });
+  assert.ok(h.calls.some(c => c[0] === "merge" && c[1] === 2 && c[2] === "feature"));
+});
+
+test("a successful merged result for an old source never permits backport merge", async () => {
+  const h = harness({
+    listMrPipelines: async () => [{ id: 12, sha: "old-result", ref: "refs/merge-requests/2/merge", status: "success" }],
+    listPipelinesForRef: async () => [],
+    getCommit: async () => ({ parent_ids: ["target", "old-source"] }),
+    createMrPipeline: async () => ({ id: 13 }),
+  });
+  await assert.rejects(h.run({ skipBuildImage: true }));
+  assert.equal(h.calls.some(c => c[0] === "merge" && c[1] === 2), false);
+});
+
+test("source changes after a merged-results success still block merge", async () => {
+  let reads = 0;
+  const h = harness({
+    listMrPipelines: async () => {
+      if (++reads === 2) h.backport.sha = "new-source";
+      return [{ id: 12, sha: "result", ref: "refs/merge-requests/2/merge", status: "success" }];
+    },
+    listPipelinesForRef: async () => [],
+    getCommit: async () => ({ parent_ids: ["target", "picked"] }),
+  });
+  await assert.rejects(h.run({ skipBuildImage: true }), /изменился/);
+  assert.equal(h.calls.some(c => c[0] === "merge" && c[1] === 2), false);
+});
+
+test("a failed merged-results pipeline resumes after a manual retry", async () => {
+  let retried = false;
+  const h = harness({
+    listMrPipelines: async () => [{ id: 12, sha: "result", ref: "refs/merge-requests/2/merge", status: retried ? "success" : "failed" }],
+    listPipelinesForRef: async () => [],
+    getCommit: async () => ({ parent_ids: ["target", "picked"] }),
+    createMrPipeline: async () => assert.fail("manual retry must be awaited"),
+  });
+  await h.run({ skipBuildImage: true }, { onPipelineState: state => {
+    if (state.waitingForRetry) retried = true;
+  } });
+  assert.ok(retried);
+  assert.ok(h.calls.some(c => c[0] === "merge" && c[1] === 2));
+});
+
+test("build fallback does not launch a pipeline for a different branch head", async () => {
+  const h = harness({
+    listPipelinesForRef: async () => [],
+    getCommit: async () => ({ id: "advanced" }),
+    createRefPipeline: async () => assert.fail("the branch no longer matches the saved build SHA"),
+  });
+  await assert.rejects(h.context.ensureBranchPipelineStarted("api", "token", "team/app", "master", 10,
+    { expectedSha: "saved", dryRun: false, log() {} }), /изменилась/);
 });
